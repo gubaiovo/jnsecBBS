@@ -100,14 +100,19 @@ func serveCmd(args []string) {
 		log.Fatalf("初始化 Web 服务失败: %v", err)
 	}
 	// 明文 HTTP 部署需在 CSRF 中间件之前（外层）标记，否则按 HTTPS 比对 Origin/Referer 导致全部 403
-	handler := csrf.Protect(csrfKey(cfg.SessionSecret),
+	opts := []csrf.Option{
 		csrf.Secure(cfg.CookieSecure),
 		csrf.CookieName("jnsec_csrf"),
 		csrf.FieldName("_csrf"),
 		csrf.RequestHeader("X-CSRF-Token"),
-		csrf.ErrorHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, fmt.Sprintf("CSRF 校验失败，请刷新页面重试。（原因: %v）", csrf.FailureReason(r)), http.StatusForbidden)
-		})))(srv.Handler())
+	}
+	if len(cfg.TrustedOrigins) > 0 {
+		opts = append(opts, csrf.TrustedOrigins(cfg.TrustedOrigins))
+	}
+	opts = append(opts, csrf.ErrorHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, fmt.Sprintf("CSRF 校验失败，请刷新页面重试。（原因: %v）", csrf.FailureReason(r)), http.StatusForbidden)
+	})))
+	handler := csrf.Protect(csrfKey(cfg.SessionSecret), opts...)(srv.Handler())
 	if !cfg.CookieSecure {
 		handler = plaintextMark(handler)
 	}

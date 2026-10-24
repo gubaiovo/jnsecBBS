@@ -140,16 +140,16 @@ docker compose up -d mysql php
 宿主机 nginx 接管 80 端口（旧容器已腾出），写入 `/etc/nginx/sites-available/bbs.jnsec.org`：
 
 ```nginx
-upstream bbs_old { server 127.0.0.1:8081; }   # 旧站
-upstream bbs_new { server 127.0.0.1:8080; }   # 新站
+upstream bbs_old { server 127.0.0.1:8081; }   
+upstream bbs_new { server 127.0.0.1:8080; }   
 
 server {
     listen 80;
     server_name bbs.jnsec.org;
-    client_max_body_size 20m;   # 旧站 fof/upload 大附件
+    client_max_body_size 20m;   
     location / {
         # 观察期：指向旧站
-        proxy_pass http://bbs_old;
+        proxy_pass http://bbs_new;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

@@ -62,6 +62,7 @@ services:
       JNSEC_DB_DSN: root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/flarum?charset=utf8mb4&parseTime=true&loc=Local
       JNSEC_SESSION_SECRET: ${SESSION_SECRET}
       JNSEC_COOKIE_SECURE: ${COOKIE_SECURE}
+      JNSEC_TRUSTED_ORIGINS: ${TRUSTED_ORIGINS}
       JNSEC_TRUST_PROXY: "true"
       JNSEC_DATA_DIR: /app/data
       JNSEC_ASSETS_DIR: ${ASSETS_DIR}

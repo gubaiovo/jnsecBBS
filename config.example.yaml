@@ -6,6 +6,10 @@ data_dir: "./data"
 session_secret: "fd19ec25c8913465de3e6d67c911950dc50af8205823b994077da989d72dce6c"
 cookie_secure: true
 trust_proxy: true
+# CSRF 同源校验白名单：站点所有可能的访问 Origin（新站子域名 / 主域全量切换后）
+trusted_origins:
+  - "https://bbs.jnsec.org"
+  - "https://new.bbs.jnsec.org"
 
 database:
   driver: "mysql"

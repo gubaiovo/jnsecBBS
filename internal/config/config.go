@@ -13,17 +13,20 @@ type Database struct {
 }
 
 type Config struct {
-	Listen        string   `yaml:"listen"`
-	SiteName      string   `yaml:"site_name"`
-	Timezone      string   `yaml:"timezone"`
-	DataDir       string   `yaml:"data_dir"`
-	SessionSecret string   `yaml:"session_secret"`
-	CookieSecure  bool     `yaml:"cookie_secure"`
-	TrustProxy    bool     `yaml:"trust_proxy"`
-	Database      Database `yaml:"database"`
-	Registration  string   `yaml:"registration"` // open | invite
-	LogLevel      string   `yaml:"log_level"`
-	AssetsDir     string   `yaml:"assets_dir"` // 旧 Flarum 静态资源目录（/assets/* 头像与附件继续可访问）
+	Listen        string `yaml:"listen"`
+	SiteName      string `yaml:"site_name"`
+	Timezone      string `yaml:"timezone"`
+	DataDir       string `yaml:"data_dir"`
+	SessionSecret string `yaml:"session_secret"`
+	CookieSecure  bool   `yaml:"cookie_secure"`
+	TrustProxy    bool   `yaml:"trust_proxy"`
+	// TrustedOrigins 是 gorilla/csrf 同源校验的白名单（完整 Origin，含协议）。
+	// TLS 在 nginx 终止、应用收到明文 HTTP 时，Origin 与转发 Host 不一致会误杀写请求，白名单兜底。
+	TrustedOrigins []string `yaml:"trusted_origins"`
+	Database       Database `yaml:"database"`
+	Registration   string   `yaml:"registration"` // open | invite
+	LogLevel       string   `yaml:"log_level"`
+	AssetsDir      string   `yaml:"assets_dir"` // 旧 Flarum 静态资源目录（/assets/* 头像与附件继续可访问）
 }
 
 func defaults() *Config {
@@ -91,6 +94,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("JNSEC_TRUST_PROXY"); v != "" {
 		cfg.TrustProxy = truthy(v)
+	}
+	if v := os.Getenv("JNSEC_TRUSTED_ORIGINS"); v != "" {
+		cfg.TrustedOrigins = strings.Split(strings.ReplaceAll(v, " ", ""), ",")
 	}
 	if v := os.Getenv("JNSEC_ASSETS_DIR"); v != "" {
 		cfg.AssetsDir = v
