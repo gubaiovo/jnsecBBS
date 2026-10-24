@@ -145,7 +145,7 @@ func (s *Server) register(c *gin.Context) {
 	}
 	u := models.User{
 		Username: username, Email: email, Password: hash,
-		IsEmailConfirmed: true, Preferences: "{}",
+		IsEmailConfirmed: true, Preferences: []byte("a:0:{}"),
 	}
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&u).Error; err != nil {

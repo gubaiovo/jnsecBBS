@@ -223,14 +223,14 @@ func userDTO(u *models.User) *UserDTO {
 	}
 	groups := make([]GroupDTO, 0, len(u.Groups))
 	for _, g := range u.Groups {
-		groups = append(groups, GroupDTO{ID: g.ID, Name: g.Name, Color: g.Color})
+		groups = append(groups, GroupDTO{ID: g.ID, Name: g.Name(), Color: g.Color})
 	}
 	return &UserDTO{
 		ID: u.ID, Username: u.Username, Bio: u.Bio,
 		Avatar: avatarURL(u), Groups: groups,
 		IsAdmin: u.IsAdmin(), IsMod: u.IsModerator(), IsBanned: u.IsBanned(),
 		DiscussionsCount: u.DiscussionsCount, PostsCount: u.PostsCount,
-		CreatedAt: u.JoinedAt, LastSeenAt: u.LastSeenAt,
+		CreatedAt: u.JoinedAtOrZero(), LastSeenAt: u.LastSeenAt,
 	}
 }
 
@@ -267,7 +267,7 @@ type TagDTO struct {
 func (s *Server) tagDTO(t *models.Tag, u *models.User) TagDTO {
 	return TagDTO{
 		ID: t.ID, Name: t.Name, Slug: t.Slug, Description: t.Description,
-		Color: t.Color, Position: t.Position, ParentID: t.ParentID,
+		Color: t.Color, Position: derefInt(t.Position), ParentID: t.ParentID,
 		DiscussionsCount: t.DiscussionsCount,
 		CanPost:          auth.CanPostTag(u, t),
 		CanView:          auth.CanViewTag(u, t),
@@ -298,7 +298,7 @@ func (s *Server) discussionSummaryDTO(d *models.Discussion, u *models.User) Disc
 		ID: d.ID, Title: d.Title, Slug: d.Slug(), Tags: tags,
 		Author:       userDTO(&d.User),
 		CommentCount: d.CommentCount,
-		CreatedAt:    d.CreatedAt, LastPostedAt: d.LastPostedAt,
+		CreatedAt:    d.CreatedAt, LastPostedAt: d.LastPostedAtOrZero(),
 		IsSticky: d.IsSticky, IsLocked: d.IsLocked, IsHidden: d.HiddenAt != nil,
 	}
 	if d.LastPostUser != nil {
@@ -328,12 +328,12 @@ type PostDTO struct {
 
 func (s *Server) postDTO(p *models.Post, likedSet map[uint]bool, u *models.User) PostDTO {
 	dto := PostDTO{
-		ID: p.ID, Number: p.Number, Author: userDTO(&p.User),
+		ID: p.ID, Number: p.PostNumber(), Author: userDTO(&p.User),
 		Content: p.Markdown(), HTML: s.renderPostHTML(p),
 		LikeCount: p.LikeCount, Liked: likedSet[p.ID],
 		CreatedAt: p.CreatedAt, EditedAt: p.EditedAt, Hidden: p.HiddenAt != nil,
 		CanEdit: auth.CanEditPost(u, p),
-		CanHide: u != nil && (u.IsModerator() || p.UserID == u.ID),
+		CanHide: u != nil && (u.IsModerator() || (p.UserID != nil && *p.UserID == u.ID)),
 	}
 	dto.Discussion.ID = p.DiscussionID
 	return dto
@@ -350,6 +350,13 @@ func (s *Server) renderPostHTML(p *models.Post) string {
 	html, _ := markdown.Render(p.Markdown(), s.mentionResolver())
 	s.renderCache.Store(p.ID, renderEntry{hash: h, html: html})
 	return html
+}
+
+func derefInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 func fnv64a(s string) uint64 {

@@ -24,7 +24,7 @@ func (s *Server) adminMeta(c *gin.Context) {
 	s.db.Where("parent_id IS NULL").Order("position ASC, id ASC").Find(&tops)
 	gd := make([]GroupDTO, 0, len(groups))
 	for _, g := range groups {
-		gd = append(gd, GroupDTO{ID: g.ID, Name: g.Name, Color: g.Color})
+		gd = append(gd, GroupDTO{ID: g.ID, Name: g.Name(), Color: g.Color})
 	}
 	td := make([]TagDTO, 0, len(tops))
 	for i := range tops {
@@ -112,11 +112,12 @@ func (s *Server) adminTagSave(c *gin.Context) {
 	if body.ParentID > 0 && body.ParentID != body.ID {
 		parentID = &body.ParentID
 	}
+	position := body.Position
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if body.ID == 0 {
 			t := models.Tag{
 				Name: name, Slug: slugIn, Description: strings.TrimSpace(body.Description),
-				Color: color, Position: body.Position, ParentID: parentID,
+				Color: color, Position: &position, ParentID: parentID,
 			}
 			if err := tx.Create(&t).Error; err != nil {
 				return err
@@ -206,15 +207,14 @@ func (s *Server) adminUserSave(c *gin.Context) {
 	}
 	switch body.Action {
 	case "ban":
-		// flarum/suspend 语义：禁言到未来时间
+		// flarum/suspend 语义：禁言到未来时间（真实列名 suspended_until）
 		until := time.Now().Add(100 * 365 * 24 * time.Hour)
 		s.db.Model(&u).Updates(map[string]any{
-			"suspend_until":   until,
-			"suspend_message": "由管理后台封禁",
+			"suspended_until": until,
 		})
 		s.db.Where("user_id = ?", u.ID).Delete(&models.AccessToken{})
 	case "unban":
-		s.db.Model(&u).Updates(map[string]any{"suspend_until": nil, "suspend_message": ""})
+		s.db.Model(&u).Updates(map[string]any{"suspended_until": nil})
 	case "groups":
 		var groups []models.Group
 		for _, gid := range body.Groups {

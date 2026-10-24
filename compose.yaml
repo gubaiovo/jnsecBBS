@@ -1,5 +1,3 @@
-name: jnsec-bbs
-
 # 三容器编排（同一网络，共享一个 MySQL 实例）：
 #   mysql —— MySQL 5.7，挂 bbsmysql 数据卷（旧 flarum 库原样保留 + 新 bbs 库）
 #   php   —— 旧站 Flarum（灰度期与新站并行；服务名固定为 mysql，

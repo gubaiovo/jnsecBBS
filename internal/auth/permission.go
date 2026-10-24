@@ -126,5 +126,5 @@ func CanEditPost(u *models.User, p *models.Post) bool {
 	if u == nil {
 		return false
 	}
-	return u.IsModerator() || p.UserID == u.ID
+	return u.IsModerator() || (p.UserID != nil && *p.UserID == u.ID)
 }

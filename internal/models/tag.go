@@ -2,20 +2,31 @@ package models
 
 import "time"
 
-// Tag 映射 flarum_tags。Flarum 无讨论计数列，DiscussionsCount 由查询层实时填充。
-type Tag struct {
-	ID           uint   `gorm:"column:id;primaryKey"`
-	Name         string `gorm:"column:name"`
-	Slug         string `gorm:"column:slug"`
-	Description  string `gorm:"column:description"`
-	Color        string `gorm:"column:color"`
-	Position     int    `gorm:"column:position"`
-	ParentID     *uint  `gorm:"column:parent_id"`
-	IsRestricted bool   `gorm:"column:is_restricted"`
+// 字段类型按生产库 information_schema 实测对齐（2026-10 采集）。
 
-	ViewGroups       []uint `gorm:"-"` // 可见组（来自 flarum_group_permission，查询层填充）
-	PostGroups       []uint `gorm:"-"` // 可发帖组
-	DiscussionsCount int    `gorm:"-"` // 实时 COUNT，不落库
+// Tag 映射 flarum_tags（含 discussion_count 计数列与 last_posted_* 冗余列，
+// PHP 端维护；Go 端读取使用，不负责刷新）。
+type Tag struct {
+	ID               uint       `gorm:"column:id;primaryKey"`
+	Name             string     `gorm:"column:name;type:varchar(100)"`
+	Slug             string     `gorm:"column:slug;type:varchar(100);uniqueIndex"`
+	Description      string     `gorm:"column:description;type:text"`
+	Color            string     `gorm:"column:color;type:varchar(50)"`
+	BackgroundPath   string     `gorm:"column:background_path;type:varchar(100)"`
+	BackgroundMode   string     `gorm:"column:background_mode;type:varchar(100)"`
+	Position         *int       `gorm:"column:position"`
+	ParentID         *uint      `gorm:"column:parent_id"`
+	DefaultSort      string     `gorm:"column:default_sort;type:varchar(50)"`
+	IsRestricted     bool       `gorm:"column:is_restricted"`
+	IsHidden         bool       `gorm:"column:is_hidden"`
+	DiscussionsCount int        `gorm:"column:discussion_count;type:int unsigned"`
+	LastPostedAt     *time.Time `gorm:"column:last_posted_at"`
+	LastPostedDiscID *uint      `gorm:"column:last_posted_discussion_id"`
+	LastPostedUserID *uint      `gorm:"column:last_posted_user_id"`
+	Icon             string     `gorm:"column:icon;type:varchar(100)"`
+
+	ViewGroups []uint `gorm:"-"` // 可见组（来自 flarum_group_permission，查询层填充）
+	PostGroups []uint `gorm:"-"` // 可发帖组
 }
 
 func (Tag) TableName() string { return "flarum_tags" }
@@ -27,7 +38,7 @@ type Notification struct {
 	UserID       uint        `gorm:"column:user_id;index:idx_bbs_notif"`
 	SenderID     uint        `gorm:"column:sender_id"`
 	Sender       User        `gorm:"foreignKey:SenderID"`
-	Type         string      `gorm:"column:type;index:idx_bbs_notif"` // reply | mention | like
+	Type         string      `gorm:"column:type;type:varchar(100);index:idx_bbs_notif"` // reply | mention | like
 	DiscussionID uint        `gorm:"column:discussion_id"`
 	Discussion   *Discussion `gorm:"foreignKey:DiscussionID"`
 	PostID       uint        `gorm:"column:post_id"`
@@ -39,8 +50,8 @@ func (Notification) TableName() string { return "bbs_notifications" }
 
 // Setting 映射 flarum_settings（与 PHP 共享；forum_title 即站点名）。
 type Setting struct {
-	Key   string `gorm:"column:key;primaryKey"`
-	Value string `gorm:"column:value"`
+	Key   string `gorm:"column:key;primaryKey;type:varchar(100)"`
+	Value string `gorm:"column:value;type:text"`
 }
 
 func (Setting) TableName() string { return "flarum_settings" }
@@ -49,7 +60,7 @@ func (Setting) TableName() string { return "flarum_settings" }
 // Flarum/tags 的 permission 形如 tag{ID}.viewDiscussions / tag{ID}.startDiscussion。
 type GroupPermission struct {
 	GroupID    uint   `gorm:"column:group_id;primaryKey"`
-	Permission string `gorm:"column:permission;primaryKey"`
+	Permission string `gorm:"column:permission;primaryKey;type:varchar(100)"`
 }
 
 func (GroupPermission) TableName() string { return "flarum_group_permission" }

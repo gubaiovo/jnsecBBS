@@ -160,7 +160,7 @@ func seedAdminCmd(args []string) {
 	} else if err != nil {
 		log.Fatalf("查询用户失败: %v", err)
 	} else {
-		updates := map[string]any{"password": hash, "email": *email, "suspend_until": nil, "suspend_message": ""}
+		updates := map[string]any{"password": hash, "email": *email, "suspended_until": nil}
 		if err := g.Model(&u).Updates(updates).Error; err != nil {
 			log.Fatalf("更新管理员失败: %v", err)
 		}

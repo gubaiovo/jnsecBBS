@@ -56,7 +56,7 @@ func (s *Server) home(c *gin.Context) {
 			First(&d).Error
 		if err == nil {
 			cd.Latest = &latestInfo{
-				Title: d.Title, URL: discussionURL(&d), At: d.LastPostedAt,
+				Title: d.Title, URL: discussionURL(&d), At: d.LastPostedAtOrZero(),
 			}
 		}
 		cards = append(cards, cd)
@@ -112,7 +112,7 @@ func (s *Server) listGroups(c *gin.Context) {
 		Order("id").Find(&groups)
 	out := make([]GroupDTO, 0, len(groups))
 	for _, g := range groups {
-		out = append(out, GroupDTO{ID: g.ID, Name: g.Name, Color: g.Color})
+		out = append(out, GroupDTO{ID: g.ID, Name: g.Name(), Color: g.Color})
 	}
 	c.JSON(http.StatusOK, gin.H{"groups": out})
 }
@@ -340,12 +340,15 @@ func (s *Server) createDiscussion(c *gin.Context) {
 		return
 	}
 	now := time.Now()
+	one := 1
+	uid := u.ID
 	d := models.Discussion{
-		Title: title, CommentCount: 1, ReplyCount: 0, ParticipantCount: 1,
-		CreatedAt: now, LastPostedAt: now, LastPostNumber: 1,
-		UserID: u.ID, LastPostUserID: &u.ID, IsApproved: true, Tags: chosen,
+		Title: title, CommentCount: 1, ParticipantCount: 1, PostNumberIndex: 1,
+		CreatedAt: now, LastPostedAt: &now, LastPostNumber: &one,
+		SlugCol: slugify(title),
+		UserID:  &uid, LastPostUserID: &uid, IsApproved: true, Tags: chosen,
 	}
-	post := models.Post{Number: 1, UserID: u.ID, CreatedAt: now, Type: "comment"}
+	post := models.Post{Number: &one, UserID: &uid, CreatedAt: now, Type: "comment", IsApproved: true}
 	post.SetMarkdown(content)
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&d).Error; err != nil {
@@ -360,13 +363,24 @@ func (s *Server) createDiscussion(c *gin.Context) {
 			return err
 		}
 		if err := tx.Model(&models.User{}).Where("id = ?", u.ID).
-			UpdateColumn("discussions_count", gorm.Expr("discussions_count + 1")).Error; err != nil {
+			UpdateColumn("discussion_count", gorm.Expr("discussion_count + 1")).Error; err != nil {
 			return err
 		}
+		// 同步版块冗余计数（PHP 端语义）
+		for _, t := range chosen {
+			if err := tx.Model(&models.Tag{}).Where("id = ?", t.ID).Updates(map[string]any{
+				"discussion_count":          gorm.Expr("discussion_count + 1"),
+				"last_posted_at":            now,
+				"last_posted_discussion_id": d.ID,
+				"last_posted_user_id":       uid,
+			}).Error; err != nil {
+				return err
+			}
+		}
 		for _, name := range markdown.MentionedUsernames(content, s.mentionResolver()) {
-			var uid uint
-			tx.Model(&models.User{}).Select("id").Where("lower(username) = lower(?)", name).Scan(&uid)
-			notify(tx, uid, u.ID, "mention", d.ID, post.ID)
+			var mid uint
+			tx.Model(&models.User{}).Select("id").Where("lower(username) = lower(?)", name).Scan(&mid)
+			notify(tx, mid, u.ID, "mention", d.ID, post.ID)
 		}
 		return nil
 	})
@@ -407,9 +421,11 @@ func (s *Server) reply(c *gin.Context) {
 		return
 	}
 	now := time.Now()
+	nextNumber := d.CommentCount + 1
+	uid := u.ID
 	post := models.Post{
-		DiscussionID: d.ID, Number: d.CommentCount + 1, UserID: u.ID,
-		CreatedAt: now, Type: "comment",
+		DiscussionID: d.ID, Number: &nextNumber, UserID: &uid,
+		CreatedAt: now, Type: "comment", IsApproved: true,
 	}
 	post.SetMarkdown(body.Content)
 	err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -419,11 +435,11 @@ func (s *Server) reply(c *gin.Context) {
 		// Flarum 计数语义（原子递增，避免与 PHP 端并发写竞态）
 		if err := tx.Model(&models.Discussion{}).Where("id = ?", d.ID).Updates(map[string]any{
 			"comment_count":       gorm.Expr("comment_count + 1"),
-			"reply_count":         gorm.Expr("reply_count + 1"),
+			"post_number_index":   gorm.Expr("post_number_index + 1"),
 			"last_posted_at":      now,
 			"last_post_id":        post.ID,
-			"last_post_number":    gorm.Expr("last_post_number + 1"),
-			"last_posted_user_id": u.ID,
+			"last_post_number":    nextNumber,
+			"last_posted_user_id": uid,
 		}).Error; err != nil {
 			return err
 		}
@@ -431,10 +447,20 @@ func (s *Server) reply(c *gin.Context) {
 			UpdateColumn("comment_count", gorm.Expr("comment_count + 1")).Error; err != nil {
 			return err
 		}
+		// 同步版块冗余计数
+		for _, t := range d.Tags {
+			if err := tx.Model(&models.Tag{}).Where("id = ?", t.ID).Updates(map[string]any{
+				"last_posted_at":            now,
+				"last_posted_discussion_id": d.ID,
+				"last_posted_user_id":       uid,
+			}).Error; err != nil {
+				return err
+			}
+		}
 		for _, name := range markdown.MentionedUsernames(body.Content, s.mentionResolver()) {
-			var uid uint
-			tx.Model(&models.User{}).Select("id").Where("lower(username) = lower(?)", name).Scan(&uid)
-			notify(tx, uid, u.ID, "mention", d.ID, post.ID)
+			var mid uint
+			tx.Model(&models.User{}).Select("id").Where("lower(username) = lower(?)", name).Scan(&mid)
+			notify(tx, mid, u.ID, "mention", d.ID, post.ID)
 		}
 		notifyDiscussionParticipants(tx, &d, u.ID, "reply", post.ID)
 		return nil
@@ -444,8 +470,8 @@ func (s *Server) reply(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"postId": post.ID, "number": post.Number,
-		"page": (post.Number-1)/perPagePosts + 1,
+		"postId": post.ID, "number": post.PostNumber(),
+		"page": (post.PostNumber()-1)/perPagePosts + 1,
 	})
 }
 
@@ -574,10 +600,14 @@ func (s *Server) editPost(c *gin.Context) {
 	s.db.Model(p).Updates(map[string]any{"edited_at": edited})
 	p.SetMarkdown(body.Content)
 	s.db.Model(p).Update("content", p.Content)
+	authorID := uint(0)
+	if p.UserID != nil {
+		authorID = *p.UserID
+	}
 	for _, name := range markdown.MentionedUsernames(body.Content, s.mentionResolver()) {
 		var uid uint
 		s.db.Model(&models.User{}).Select("id").Where("lower(username) = lower(?)", name).Scan(&uid)
-		notify(s.db, uid, p.UserID, "mention", p.DiscussionID, p.ID)
+		notify(s.db, uid, authorID, "mention", p.DiscussionID, p.ID)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "editedAt": edited})
 }
@@ -587,7 +617,7 @@ func (s *Server) hidePost(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if p.UserID != u.ID && !u.IsModerator() {
+	if (p.UserID == nil || *p.UserID != u.ID) && !u.IsModerator() {
 		fail(c, http.StatusForbidden, "无权隐藏该回复。")
 		return
 	}
@@ -614,7 +644,9 @@ func (s *Server) toggleLike(c *gin.Context) {
 			return
 		}
 		liked = true
-		notify(s.db, p.UserID, u.ID, "like", p.DiscussionID, p.ID)
+		if p.UserID != nil {
+			notify(s.db, *p.UserID, u.ID, "like", p.DiscussionID, p.ID)
+		}
 	}
 	var n int64
 	s.db.Model(&models.PostLike{}).Where("post_id = ?", p.ID).Count(&n)
