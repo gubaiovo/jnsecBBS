@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    name: Go（fmt / vet / test）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt 格式检查
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::以下文件未通过 gofmt，请运行 gofmt -w："
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -count=1 ./...
+
+  frontend:
+    name: Frontend（bun 构建校验）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 安装依赖
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
+      - name: 构建校验（tsc 类型检查 + vite 打包）
+        working-directory: frontend
+        run: bun run build

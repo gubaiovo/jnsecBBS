@@ -1,0 +1,101 @@
+name: Release
+
+# 打 v* 标签触发；也可在 Actions 页面手动触发
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # 创建 GitHub Release
+
+env:
+  IMAGE: bbs
+
+jobs:
+  docker:
+    name: 构建镜像（Release 附件）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 构建镜像（bun 前端 → Go 后端，多阶段）
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          docker buildx build --load -t ${IMAGE}:latest -t ${IMAGE}:${VERSION} .
+          docker image ls ${IMAGE}
+
+      - name: 导出镜像 tar 包（离线导入用）
+        run: |
+          docker save ${IMAGE}:latest -o image.tar
+          gzip image.tar
+          mv image.tar.gz "bbs-image-${{ github.ref_name }}.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: bbs-image-*.tar.gz
+          retention-days: 3
+
+  binary:
+    name: 构建二进制产物
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 构建前端（刷新内嵌产物）
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: 交叉编译
+        run: |
+          CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/bbs-linux-amd64       ./cmd/bbs
+          CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/bbs-darwin-arm64      ./cmd/bbs
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/bbs-windows-amd64.exe ./cmd/bbs
+
+      - name: 打包（含配置示例、compose 与迁移手册）
+        run: |
+          cp config.example.yaml compose.yaml .env.example dist/
+          tar -czf "bbs-${{ github.ref_name }}-linux-amd64.tar.gz" -C dist bbs-linux-amd64 config.example.yaml compose.yaml .env.example
+          tar -czf "bbs-${{ github.ref_name }}-darwin-arm64.tar.gz" -C dist bbs-darwin-arm64 config.example.yaml compose.yaml .env.example
+          mv dist/bbs-windows-amd64.exe .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            bbs-*-linux-amd64.tar.gz
+            bbs-*-darwin-arm64.tar.gz
+            bbs-windows-amd64.exe
+          retention-days: 3
+
+  release:
+    name: 创建 GitHub Release
+    needs: [docker, binary]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/bbs-image-*.tar.gz
+            release/bbs-*-linux-amd64.tar.gz
+            release/bbs-*-darwin-arm64.tar.gz
+            release/bbs-windows-amd64.exe
+          generate_release_notes: true

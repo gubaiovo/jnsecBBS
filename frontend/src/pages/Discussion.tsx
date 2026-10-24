@@ -1,0 +1,282 @@
+import { useEffect, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link, useNavigate, useParams, useSearchParams } from "react-router"
+import {
+  Flag, Heart, Lock, Pencil, Pin, Tag as TagIcon, Trash2,
+} from "lucide-react"
+import { toast } from "sonner"
+import { api, discussionUrl } from "@/lib/api"
+import type { DiscussionDetail, Post } from "@/lib/types"
+import { MarkdownBody } from "@/components/MarkdownBody"
+import { MarkdownEditor } from "@/components/MarkdownEditor"
+import { Pagination } from "@/components/Pagination"
+import { GroupBadges, TagChip, UserAvatar } from "@/components/DiscussionParts"
+import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { timeAgo } from "@/lib/format"
+
+export default function DiscussionPage() {
+  const { idSlug = "" } = useParams()
+  const id = Number(idSlug.split("-")[0]) || 0
+  const [params, setParams] = useSearchParams()
+  const page = Number(params.get("page") ?? 1) || 1
+  const navigate = useNavigate()
+  const qc = useQueryClient()
+
+  const { data, isError, error } = useQuery({
+    queryKey: ["discussion", id, page],
+    queryFn: () => api<DiscussionDetail>(`/api/discussions/${id}?page=${page}`),
+    retry: false,
+  })
+
+  // 旧链接 /d/{id} 规范化为 /d/{id}-{slug}
+  useEffect(() => {
+    if (data && idSlug !== `${data.discussion.id}-${data.discussion.slug}` && data.discussion.slug) {
+      navigate(discussionUrl(data.discussion.id, data.discussion.slug) + `?page=${page}`, {
+        replace: true,
+      })
+    }
+  }, [data, idSlug, navigate, page])
+
+  const reply = useMutation({
+    mutationFn: (content: string) =>
+      api<{ postId: number; number: number; page: number }>(`/api/discussions/${id}/reply`, {
+        json: { content },
+      }),
+    onSuccess: (r) => {
+      toast.success("回复成功")
+      void qc.invalidateQueries({ queryKey: ["discussion", id] })
+      void qc.invalidateQueries({ queryKey: ["me"] })
+      setParams({ page: String(r.page) })
+      setTimeout(() => {
+        document.getElementById(`post-${r.postId}`)?.scrollIntoView({ behavior: "smooth" })
+      }, 300)
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const mod = useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      api(`/api/discussions/${id}/mod`, { json: body }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["discussion", id] })
+      void qc.invalidateQueries({ queryKey: ["tagDiscussions"] })
+      void qc.invalidateQueries({ queryKey: ["home"] })
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  if (isError) {
+    return (
+      <div className="py-20 text-center">
+        <h1 className="text-xl font-bold">{(error as Error).message}</h1>
+        <Button asChild variant="link">
+          <Link to="/">返回首页</Link>
+        </Button>
+      </div>
+    )
+  }
+  if (!data) {
+    return <div className="py-20 text-center text-muted-foreground">加载中…</div>
+  }
+
+  const d = data.discussion
+  return (
+    <div>
+      <div className="mb-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {d.isHidden && (
+            <span className="rounded bg-red-500/10 px-2 py-0.5 text-xs font-semibold text-red-600 dark:text-red-400">
+              已删除
+            </span>
+          )}
+          <h1 className="text-2xl font-bold">{d.title}</h1>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          {d.tags.map((t) => (
+            <TagChip key={t.id} tag={t} />
+          ))}
+          <Link to={`/u/${d.author?.username ?? ""}`} className="flex items-center gap-1.5 hover:text-primary">
+            <UserAvatar user={d.author} className="size-6" />
+            {d.author?.username}
+          </Link>
+          <time>{timeAgo(d.createdAt)}</time>
+          {d.isLocked && (
+            <span className="inline-flex items-center gap-1 text-xs">
+              <Lock className="size-3.5" /> 已锁定
+            </span>
+          )}
+        </div>
+      </div>
+
+      {data.isMod && <ModBar d={d} editorTags={data.editorTags} onAction={mod.mutate} />}
+
+      <section className="flex flex-col">
+        {data.posts.map((p) => (
+          <PostItem key={p.id} p={p} />
+        ))}
+      </section>
+
+      <Pagination page={data.page} onPage={(p) => setParams({ page: String(p) })} />
+
+      {data.canReply ? (
+        <div className="mt-2 rounded-xl bg-muted/40 p-4">
+          <ReplyForm onSubmit={(v) => reply.mutate(v)} submitting={reply.isPending} />
+        </div>
+      ) : (
+        <p className="py-6 text-center text-sm text-muted-foreground">
+          {d.isLocked ? "该帖子已被锁定，无法回复。" : "登录后参与讨论。"}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function ModBar({
+  d, editorTags, onAction,
+}: {
+  d: DiscussionDetail["discussion"]
+  editorTags: DiscussionDetail["editorTags"]
+  onAction: (body: Record<string, unknown>) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [title, setTitle] = useState(d.title)
+  const [tagIds, setTagIds] = useState<number[]>(d.tags.map((t) => t.id))
+
+  function toggleTag(tid: number) {
+    setTagIds((cur) => (cur.includes(tid) ? cur.filter((x) => x !== tid) : [...cur, tid]))
+  }
+
+  return (
+    <Card className="mb-4 flex flex-wrap items-center gap-2 border-none bg-muted/40 p-3 shadow-none">
+      <span className="text-xs text-muted-foreground">版主操作：</span>
+      <Button variant="outline" size="sm" className="gap-1" onClick={() => onAction({ action: "toggle_sticky" })}>
+        <Pin className="size-3.5" /> {d.isSticky ? "取消置顶" : "置顶"}
+      </Button>
+      <Button variant="outline" size="sm" className="gap-1" onClick={() => onAction({ action: "toggle_lock" })}>
+        <Lock className="size-3.5" /> {d.isLocked ? "解锁" : "锁定"}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="gap-1 text-red-600"
+        onClick={() => {
+          if (confirm(`确定${d.isHidden ? "恢复" : "删除"}该帖子？`)) onAction({ action: "toggle_hidden" })
+        }}
+      >
+        <Trash2 className="size-3.5" /> {d.isHidden ? "恢复" : "删除"}
+      </Button>
+      <Button variant="outline" size="sm" className="gap-1" onClick={() => setEditing(!editing)}>
+        <Pencil className="size-3.5" /> 编辑标题与标签
+      </Button>
+      {editing && (
+        <div className="w-full space-y-3 border-t pt-3">
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} />
+          <div className="flex flex-wrap gap-2">
+            {editorTags.map((t) => (
+              <label key={t.id} className="flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs has-[:checked]:bg-primary has-[:checked]:text-primary-foreground">
+                <input type="checkbox" className="hidden" checked={tagIds.includes(t.id)} onChange={() => toggleTag(t.id)} />
+                <TagIcon className="size-3" /> {t.name}
+              </label>
+            ))}
+          </div>
+          <Button size="sm" onClick={() => { onAction({ action: "edit_meta", title, tagIds }); setEditing(false) }}>
+            保存
+          </Button>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function PostItem({ p }: { p: Post }) {
+  const qc = useQueryClient()
+  const like = useMutation({
+    mutationFn: () => api<{ liked: boolean; likeCount: number }>(`/api/posts/${p.id}/like`, { method: "POST" }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["discussion"] }),
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const hide = useMutation({
+    mutationFn: () => api<{ hidden: boolean }>(`/api/posts/${p.id}/hide`, { method: "POST" }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["discussion"] }),
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  return (
+    <article
+      id={`post-${p.id}`}
+      className={`border-b border-border/50 px-1 py-5 last:border-b-0 ${p.hidden ? "opacity-60" : ""}`}
+    >
+      <header className="mb-2 flex items-center gap-2.5">
+        <Link to={`/u/${p.author?.username ?? ""}`}>
+          <UserAvatar user={p.author} />
+        </Link>
+        <div className="flex flex-col leading-tight">
+          <Link to={`/u/${p.author?.username ?? ""}`} className="flex items-center gap-1.5 text-sm font-semibold hover:text-primary">
+            {p.author?.username}
+            {p.author && <GroupBadges user={p.author} />}
+          </Link>
+          <time className="text-xs text-muted-foreground">
+            {timeAgo(p.createdAt)}
+            {p.editedAt ? " · 已编辑" : ""}
+          </time>
+        </div>
+        <span className="ml-auto text-xs text-muted-foreground">#{p.number}</span>
+      </header>
+
+      {p.hidden ? (
+        <p className="text-sm text-muted-foreground">该回复已被隐藏。</p>
+      ) : (
+        <MarkdownBody html={p.html} />
+      )}
+
+      <footer className="mt-3 flex items-center gap-3 text-sm">
+        {p.canEdit && (
+          <Link to={`/posts/${p.id}/edit`} className="inline-flex items-center gap-1 text-muted-foreground hover:text-primary">
+            <Pencil className="size-3.5" /> 编辑
+          </Link>
+        )}
+        {p.canHide && (
+          <button
+            className="inline-flex items-center gap-1 text-muted-foreground hover:text-red-600"
+            onClick={() => hide.mutate()}
+          >
+            <Flag className="size-3.5" /> {p.hidden ? "恢复" : "隐藏"}
+          </button>
+        )}
+        <button
+          onClick={() => like.mutate()}
+          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-muted-foreground transition-colors hover:bg-rose-500/10 hover:text-rose-600 ${
+            p.liked ? "bg-rose-500/10 font-semibold text-rose-600" : ""
+          }`}
+        >
+          <Heart className={`size-4 ${p.liked ? "fill-rose-600" : ""}`} /> {p.likeCount}
+        </button>
+      </footer>
+    </article>
+  )
+}
+
+function ReplyForm({ onSubmit, submitting }: { onSubmit: (v: string) => void; submitting: boolean }) {
+  const [content, setContent] = useState("")
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (content.trim()) {
+          onSubmit(content)
+          setContent("")
+        }
+      }}
+    >
+      <MarkdownEditor value={content} onChange={setContent} rows={5} placeholder="发表回复…（支持 Markdown，@用户名 可提醒对方）" />
+      <div className="mt-3 flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">支持 Markdown</span>
+        <Button type="submit" disabled={submitting || !content.trim()}>
+          发表回复
+        </Button>
+      </div>
+    </form>
+  )
+}

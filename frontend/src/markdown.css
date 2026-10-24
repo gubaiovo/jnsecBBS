@@ -1,0 +1,30 @@
+/* ---------- Markdown 正文（服务端已消毒的 HTML） ---------- */
+.md-body h2 { font-size: 1.2em; font-weight: 700; margin: 1em 0 0.4em; }
+.md-body h3 { font-size: 1.05em; font-weight: 700; margin: 0.8em 0 0.3em; }
+.md-body p { margin: 0.5em 0; }
+.md-body ul { list-style: disc; padding-left: 1.4em; margin: 0.5em 0; }
+.md-body ol { list-style: decimal; padding-left: 1.4em; margin: 0.5em 0; }
+.md-body blockquote {
+  border-left: 3px solid var(--border);
+  background: var(--muted);
+  padding: 0.4em 1em;
+  margin: 0.6em 0;
+  border-radius: 0 8px 8px 0;
+  color: var(--muted-foreground);
+}
+.md-body pre {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.8em 1em;
+  overflow-x: auto;
+  margin: 0.6em 0;
+  font-size: 0.9em;
+}
+.md-body pre code { background: none; padding: 0; border: none; }
+.md-body code { background: var(--muted); border-radius: 4px; padding: 0.1em 0.35em; font-size: 0.9em; }
+.md-body img { max-width: 100%; border-radius: 8px; }
+.md-body table { border-collapse: collapse; margin: 0.6em 0; width: 100%; }
+.md-body th, .md-body td { border: 1px solid var(--border); padding: 0.35em 0.7em; text-align: left; }
+.md-body a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.md-body hr { border-color: var(--border); margin: 1em 0; }
