@@ -136,25 +136,35 @@ docker stop bbs104-php-fix-php2shell bbs104-mysql-fix-php2shell
 # 启动 mysql + php（旧站照常对外，数据库换由新容器提供）
 docker compose up -d mysql php
 ```
-
-宿主机 nginx 接管 80 端口（旧容器已腾出），写入 `/etc/nginx/sites-available/bbs.jnsec.org`。主域名指向旧站（观察期配置）：
-
-```nginx
-upstream bbs_old { server 127.0.0.1:8081; }   # 旧站
-
 server {
     listen 80;
     server_name bbs.jnsec.org;
-    return 301 https://$host$request_uri;
-}
-server {
-    listen 443 ssl http2;
-    server_name bbs.jnsec.org;
-    ssl_certificate     /etc/letsencrypt/live/bbs.jnsec.org/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/bbs.jnsec.org/privkey.pem;
     client_max_body_size 20m;
+
+    # 默认指向旧站（PHP）
+    set $bbs_backend "http://127.0.0.1:8081";
+
+    # ⬇️ 核心开关 1：访问这个路径，切换到新站(Go)
+    location = /switch-to-new {
+        add_header Set-Cookie "site_version=go; Path=/; Max-Age=31536000; SameSite=Lax";
+        return 302 /;
+    }
+
+    # ⬇️ 核心开关 2：访问这个路径，切回旧站(PHP)
+    location = /switch-to-old {
+        add_header Set-Cookie "site_version=old; Path=/; Max-Age=31536000; SameSite=Lax";
+        return 302 /;
+    }
+
+    # 正常业务请求
     location / {
-        proxy_pass http://bbs_old;
+        # 如果 Cookie 里带有 site_version=go，则把后端地址修改为新站
+        if ($cookie_site_version = "go") {
+            set $bbs_backend "http://127.0.0.1:8080";
+        }
+
+        # 使用上面动态修改后的变量进行代理
+        proxy_pass $bbs_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -163,88 +173,7 @@ server {
 }
 ```
 
-```bash
-ln -sf /etc/nginx/sites-available/bbs.jnsec.org /etc/nginx/sites-enabled/bbs.jnsec.org
-rm -f /etc/nginx/sites-enabled/default
-nginx -t && systemctl reload nginx
-```
-
-浏览器打开 `http://bbs.jnsec.org` 验证旧站与迁移前完全一致（数据库实例已换成新容器）。
-
-### 步骤三：启动新站
-
-```bash
-docker compose up -d app
-# 沿用原 Flarum 管理员账号（用户名不变，重置密码并提权）
-docker compose exec app /app/bbs seed-admin -username 原管理员用户名 -email 原邮箱 -password 新密码
-```
-
-浏览器打开 `http://<host>:8080` 验证：首页版块卡片、**旧帖实时可见（同一套表）**、旧账号密码登录、发帖/回复/通知。
-
-### 步骤四：新旧站分离（各自独立入口）
-
-> ⚠️ **不要用轮询把两站挂在同一个域名下**。同一域名的静态资源/登录态请求会随机落到不同站点，导致样式丢失、登录"弹回"等串站问题（两站 cookie 与资源路径互不兼容）。灰度必须按下面方式整站分离。
-
-主域名 `bbs.jnsec.org` 保持指向旧站，新站走独立入口，二选一：
-
-**方案 A：子域名 `new.bbs.jnsec.org`（推荐）**
-
-```bash
-# 1) DNS 控制台为 jnsec.org 添加 A 记录：new.bbs → 服务器公网 IP
-# 2) 签发证书（DNS 生效后）
-certbot --nginx -d new.bbs.jnsec.org
-```
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name new.bbs.jnsec.org;
-    ssl_certificate     /etc/letsencrypt/live/new.bbs.jnsec.org/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/new.bbs.jnsec.org/privkey.pem;
-    client_max_body_size 20m;
-    location / {
-        proxy_pass http://127.0.0.1:8080;   # 新站
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-**方案 B：8443 端口（免 DNS 改动，复用主域证书）**
-
-```nginx
-server {
-    listen 8443 ssl;
-    server_name bbs.jnsec.org;
-    ssl_certificate     /etc/letsencrypt/live/bbs.jnsec.org/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/bbs.jnsec.org/privkey.pem;
-    client_max_body_size 20m;
-    location / {
-        proxy_pass http://127.0.0.1:8080;   # 新站
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-云安全组放行 8443 后访问 `https://bbs.jnsec.org:8443`。
-
-> `proxy_set_header Host $host;` 这行必须保留：新站 CSRF 会校验 Origin 与 Host 一致（`.env` 里 `TRUSTED_ORIGINS` 是兜底白名单）。
-
-```bash
-nginx -t && systemctl reload nginx
-```
-
-分离验收清单（在新站入口上）：样式完好 → 旧账号密码登录 → 旧帖可见 → 发帖/回复 → 在旧站刷新能看到该帖（同库实时互通）。
-
-### 步骤五：全量切换与回滚
-
-- **全量切换**：把主域名 443 块的 `proxy_pass` 从 `bbs_old` 改为 `http://127.0.0.1:8080`，`nginx -s reload`；随后 `docker compose stop php` 并从 compose.yaml 移除 `php` 服务块。
-- **回滚**：`proxy_pass` 改回 `bbs_old`，`nginx -s reload`——由于两站共用同一套表，回滚**没有数据丢失**（Go 端发的帖 PHP 端直接可见）。
+宿主机 nginx 接管 80 端口，写入 `/etc/nginx/sites-available/bbs.jnsec.org`。
 
 ### 收尾
 
@@ -259,12 +188,6 @@ nginx -t && systemctl reload nginx
   1. 用仓库内 Dockerfile 多阶段构建镜像（bun 构建前端 → Go 编译）；
   2. 交叉编译 linux / macOS / Windows 二进制；
   3. 创建 **GitHub Release**，附件包含：镜像 tar 包（`docker save` 导出，服务器 `docker load` 导入）、三平台二进制压缩包（内含 compose、.env 示例）。
-
-发版流程：
-
-```bash
-git tag v1.0.0 && git push origin v1.0.0
-```
 
 ## 目录结构
 
