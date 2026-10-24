@@ -25,13 +25,14 @@ func Open(driver, dsn string) (*gorm.DB, error) {
 }
 
 // Migrate 确保表结构，按驱动分流：
-//   - MySQL（生产）：flarum_* 表由 PHP 侧管理，**绝不 AutoMigrate**（防止对线上表
-//     产生任何 ALTER——类型/索引差异都可能改动或破坏 PHP 的结构）；仅确保两张
-//     Go 专属辅助表 bbs_* 存在（CREATE TABLE IF NOT EXISTS 语义）。
+//   - MySQL（生产）：flarum_* 表由 PHP 侧管理，**绝不使用 AutoMigrate**——
+//     GORM 会递归跟随模型关联去 ALTER 被关联的 flarum 表（如把 user_id 改成
+//     bigint unsigned，被外键约束拒绝）。两张 Go 专属辅助表用裸 DDL
+//     CREATE TABLE IF NOT EXISTS 创建，零递归、零风险。
 //   - SQLite（本地开发）：全部表按模型自动创建（首次启动即为 flarum 结构）。
 func Migrate(g *gorm.DB, seed bool) error {
 	if g.Dialector.Name() == "mysql" {
-		if err := g.AutoMigrate(&models.Notification{}, &models.InviteCode{}); err != nil {
+		if err := createBBSTablesMySQL(g); err != nil {
 			return fmt.Errorf("migrate bbs tables: %w", err)
 		}
 		if err := ensureMySQLCompatibility(g); err != nil {
@@ -52,6 +53,41 @@ func Migrate(g *gorm.DB, seed bool) error {
 	}
 	if seed {
 		return SeedDefaults(g)
+	}
+	return nil
+}
+
+// createBBSTablesMySQL 用裸 DDL 创建 Go 专属辅助表（幂等）。
+// 不走 AutoMigrate：其会递归跟随模型关联（Notification→Discussion/Sender）
+// 去 ALTER flarum 表，已被外键约束拒绝过一次（Error 1832）。
+func createBBSTablesMySQL(g *gorm.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS bbs_notifications (
+			id int unsigned NOT NULL AUTO_INCREMENT,
+			user_id int unsigned NOT NULL,
+			sender_id int unsigned NOT NULL,
+			type varchar(100) NOT NULL,
+			discussion_id int unsigned NOT NULL,
+			post_id int unsigned NOT NULL,
+			read_at datetime DEFAULT NULL,
+			created_at datetime NOT NULL,
+			PRIMARY KEY (id),
+			KEY idx_bbs_notif (user_id, type)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+		`CREATE TABLE IF NOT EXISTS bbs_invite_codes (
+			code varchar(20) NOT NULL,
+			created_by int unsigned NOT NULL,
+			used_by int unsigned DEFAULT NULL,
+			used_at datetime DEFAULT NULL,
+			expires_at datetime DEFAULT NULL,
+			created_at datetime NOT NULL,
+			PRIMARY KEY (code)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+	}
+	for _, s := range stmts {
+		if err := g.Exec(s).Error; err != nil {
+			return err
+		}
 	}
 	return nil
 }
