@@ -1,24 +1,41 @@
-# 生产环境 nginx 反代示例（bbs.jnsec.org）
+# 生产环境 nginx 反代示例：双域名分流（纯 HTTP，源站不用证书）
+#   bbs.jnsec.org      → 127.0.0.1:8081  旧站（Flarum）
+#   new.bbs.jnsec.org  → 127.0.0.1:8080  新站（Go）
+#
+# 源站是 HTTP 时按前置情况二选一：
+#   · 前面有 Cloudflare 等 CDN 终结 HTTPS（用户浏览器看到的是 https）：
+#       .env 保持 COOKIE_SECURE=true；CDN 会带 X-Forwarded-Proto: https 过来，
+#       把两个 location 里的 X-Forwarded-Proto 换成透传：
+#           proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+#   · 用户直接 http 访问源站：
+#       .env 必须 COOKIE_SECURE=false，否则浏览器不回传会话 Cookie，
+#       表现为登录成功后刷新即掉线。
+
 server {
     listen 80;
     server_name bbs.jnsec.org;
-    return 301 https://$host$request_uri;
-}
+    client_max_body_size 20m;
 
-server {
-    listen 443 ssl http2;
-    server_name bbs.jnsec.org;
-
-    ssl_certificate     /etc/nginx/ssl/bbs.jnsec.org.fullchain.pem;
-    ssl_certificate_key /etc/nginx/ssl/bbs.jnsec.org.key;
-
-    # Go 侧需配置 trust_proxy: true、cookie_secure: true
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:8081;   # 旧站（Flarum）
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        client_max_body_size 4m;
+    }
+}
+
+server {
+    listen 80;
+    server_name new.bbs.jnsec.org;
+    client_max_body_size 20m;
+
+    # Go 侧需 trust_proxy: true（compose 已内置）
+    location / {
+        proxy_pass http://127.0.0.1:8080;   # 新站（Go）
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
