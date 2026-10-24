@@ -157,7 +157,7 @@ func (s *Server) adminTagDelete(c *gin.Context) {
 		return
 	}
 	var used int64
-	s.db.Model(&models.Discussion{}).Joins("JOIN flarum_discussion_tag dt ON dt.discussion_id = discussions.id").
+	s.db.Model(&models.Discussion{}).Joins("JOIN flarum_discussion_tag dt ON dt.discussion_id = flarum_discussions.id").
 		Where("dt.tag_id = ?", id).Count(&used)
 	if used > 0 {
 		fail(c, http.StatusBadRequest, "该版块下仍有讨论，无法删除。")

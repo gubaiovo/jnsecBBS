@@ -12,9 +12,10 @@ import (
 
 const SessionCookie = "jnsec_session"
 
-// NewToken 生成 128bit 随机 token。
+// NewToken 生成随机 token（20 字节 = 40 个 hex 字符——必须 ≤ flarum_access_tokens.token
+// 的 varchar(40)，32 字节会触发 Data too long）。
 func NewToken() (string, error) {
-	b := make([]byte, 32)
+	b := make([]byte, 20)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}

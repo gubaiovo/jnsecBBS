@@ -49,9 +49,9 @@ func (s *Server) home(c *gin.Context) {
 			ids = append(ids, ch.ID)
 		}
 		var d models.Discussion
-		err := s.db.Joins("JOIN flarum_discussion_tag dt ON dt.discussion_id = discussions.id").
-			Where("dt.tag_id IN ? AND discussions.hidden_at IS NULL", ids).
-			Order("discussions.last_posted_at DESC").
+		err := s.db.Joins("JOIN flarum_discussion_tag dt ON dt.discussion_id = flarum_discussions.id").
+			Where("dt.tag_id IN ? AND flarum_discussions.hidden_at IS NULL AND flarum_discussions.is_approved = 1", ids).
+			Order("flarum_discussions.last_posted_at DESC").
 			Preload("User").Preload("Tags").
 			First(&d).Error
 		if err == nil {
@@ -163,18 +163,18 @@ func (s *Server) tagDiscussions(c *gin.Context) {
 		ids = append(ids, ch.ID)
 	}
 	s.fillTagCounts(append([]models.Tag{*tag}, children...))
-	base := s.db.Joins("JOIN flarum_discussion_tag dt ON dt.discussion_id = discussions.id").
-		Where("dt.tag_id IN ? AND discussions.hidden_at IS NULL", ids)
+	base := s.db.Joins("JOIN flarum_discussion_tag dt ON dt.discussion_id = flarum_discussions.id").
+		Where("dt.tag_id IN ? AND flarum_discussions.hidden_at IS NULL AND flarum_discussions.is_approved = 1", ids)
 	var total int64
-	base.Session(&gorm.Session{}).Distinct("discussions.id").Count(&total)
+	base.Session(&gorm.Session{}).Distinct("flarum_discussions.id").Count(&total)
 
 	page := pageParam(c)
 	pages := paginate(int(total), page, perPageDiscussions)
 	var discs []models.Discussion
 	base.Session(&gorm.Session{}).
 		Preload("User").Preload("Tags").Preload("LastPostUser").
-		Distinct("discussions.*").
-		Order("discussions.is_sticky DESC, discussions.last_posted_at DESC").
+		Distinct("flarum_discussions.*").
+		Order("flarum_discussions.is_sticky DESC, flarum_discussions.last_posted_at DESC").
 		Limit(perPageDiscussions).Offset((page - 1) * perPageDiscussions).Find(&discs)
 
 	items := make([]DiscussionSummaryDTO, 0, len(discs))
@@ -247,6 +247,11 @@ func (s *Server) loadDiscussion(c *gin.Context, id uint) (*models.Discussion, *m
 		fail(c, http.StatusNotFound, "该帖子不存在或已被删除。")
 		return nil, nil, false
 	}
+	// flarum/approval：未审核帖仅版主可见
+	if !d.IsApproved && !isMod {
+		fail(c, http.StatusNotFound, "该帖子不存在或已被删除。")
+		return nil, nil, false
+	}
 	return &d, u, true
 }
 
@@ -264,7 +269,7 @@ func (s *Server) discussionDetail(c *gin.Context) {
 	pages := paginate(d.CommentCount, page, perPagePosts)
 
 	var posts []models.Post
-	s.db.Where("discussion_id = ? AND type = ?", d.ID, "comment").Order("number ASC").
+	s.db.Where("discussion_id = ? AND type = ? AND is_approved = ?", d.ID, "comment", true).Order("number ASC").
 		Limit(perPagePosts).Offset((page - 1) * perPagePosts).Preload("User").Find(&posts)
 
 	liked := s.loadLikes(posts, u)
@@ -342,11 +347,13 @@ func (s *Server) createDiscussion(c *gin.Context) {
 	now := time.Now()
 	one := 1
 	uid := u.ID
+	// 不内嵌 Tags（GORM Create 会跟随关联对 flarum_tags 做隐式 UPSERT），
+	// 改为建帖后用 Association 显式写 flarum_discussion_tag。
 	d := models.Discussion{
 		Title: title, CommentCount: 1, ParticipantCount: 1, PostNumberIndex: 1,
 		CreatedAt: now, LastPostedAt: &now, LastPostNumber: &one,
 		SlugCol: slugify(title),
-		UserID:  &uid, LastPostUserID: &uid, IsApproved: true, Tags: chosen,
+		UserID:  &uid, LastPostUserID: &uid, IsApproved: true,
 	}
 	post := models.Post{Number: &one, UserID: &uid, CreatedAt: now, Type: "comment", IsApproved: true}
 	post.SetMarkdown(content)
@@ -356,6 +363,9 @@ func (s *Server) createDiscussion(c *gin.Context) {
 		}
 		post.DiscussionID = d.ID
 		if err := tx.Create(&post).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&d).Association("Tags").Append(&chosen); err != nil {
 			return err
 		}
 		if err := tx.Model(&models.Discussion{}).Where("id = ?", d.ID).
@@ -405,6 +415,10 @@ func (s *Server) reply(c *gin.Context) {
 	}
 	if d.HiddenAt != nil {
 		fail(c, http.StatusBadRequest, "该帖子已被隐藏。")
+		return
+	}
+	if !d.IsApproved {
+		fail(c, http.StatusBadRequest, "该帖子尚未通过审核。")
 		return
 	}
 	for _, t := range d.Tags {
@@ -663,18 +677,18 @@ func (s *Server) profile(c *gin.Context) {
 	}
 	viewer := s.currentUser(c)
 	canSeeHidden := viewer != nil && viewer.IsModerator()
-	dQuery := s.db.Model(&models.Discussion{}).Where("discussions.user_id = ?", p.ID)
+	dQuery := s.db.Model(&models.Discussion{}).Where("flarum_discussions.user_id = ?", p.ID)
 	if !canSeeHidden {
-		dQuery = dQuery.Where("discussions.hidden_at IS NULL")
+		dQuery = dQuery.Where("flarum_discussions.hidden_at IS NULL AND flarum_discussions.is_approved = 1")
 	}
 	var total int64
 	dQuery.Session(&gorm.Session{}).Count(&total)
 	var discs []models.Discussion
 	dQuery.Session(&gorm.Session{}).Preload("User").Preload("Tags").
-		Order("discussions.last_posted_at DESC").Limit(10).Find(&discs)
+		Order("flarum_discussions.last_posted_at DESC").Limit(10).Find(&discs)
 
 	var posts []models.Post
-	s.db.Where("user_id = ? AND hidden_at IS NULL AND type = ?", p.ID, "comment").
+	s.db.Where("user_id = ? AND hidden_at IS NULL AND type = ? AND is_approved = ?", p.ID, "comment", true).
 		Preload("Discussion").Preload("User").
 		Order("created_at DESC").Limit(10).Find(&posts)
 	type postRow struct {
@@ -716,11 +730,11 @@ func (s *Server) search(c *gin.Context) {
 	if len([]rune(q)) >= 2 {
 		like := "%" + q + "%"
 		var discs []models.Discussion
-		s.db.Where("hidden_at IS NULL AND title LIKE ?", like).
+		s.db.Where("hidden_at IS NULL AND is_approved = 1 AND title LIKE ?", like).
 			Preload("User").Preload("Tags").
 			Order("last_posted_at DESC").Limit(20).Find(&discs)
 		var posts []models.Post
-		s.db.Where("hidden_at IS NULL AND content LIKE ? AND type = ?", like, "comment").
+		s.db.Where("hidden_at IS NULL AND is_approved = 1 AND content LIKE ? AND type = ?", like, "comment").
 			Preload("User").Preload("Discussion").
 			Order("created_at DESC").Limit(20).Find(&posts)
 		data["discussions"] = s.summaries(discs, s.currentUser(c))
