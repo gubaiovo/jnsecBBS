@@ -137,19 +137,24 @@ docker stop bbs104-php-fix-php2shell bbs104-mysql-fix-php2shell
 docker compose up -d mysql php
 ```
 
-宿主机 nginx 接管 80 端口（旧容器已腾出），写入 `/etc/nginx/sites-available/bbs.jnsec.org`：
+宿主机 nginx 接管 80 端口（旧容器已腾出），写入 `/etc/nginx/sites-available/bbs.jnsec.org`。主域名指向旧站（观察期配置）：
 
 ```nginx
-upstream bbs_old { server 127.0.0.1:8081; }   
-upstream bbs_new { server 127.0.0.1:8080; }   
+upstream bbs_old { server 127.0.0.1:8081; }   # 旧站
 
 server {
     listen 80;
     server_name bbs.jnsec.org;
-    client_max_body_size 20m;   
+    return 301 https://$host$request_uri;
+}
+server {
+    listen 443 ssl http2;
+    server_name bbs.jnsec.org;
+    ssl_certificate     /etc/letsencrypt/live/bbs.jnsec.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bbs.jnsec.org/privkey.pem;
+    client_max_body_size 20m;
     location / {
-        # 观察期：指向旧站
-        proxy_pass http://bbs_new;
+        proxy_pass http://bbs_old;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -176,18 +181,29 @@ docker compose exec app /app/bbs seed-admin -username 原管理员用户名 -ema
 
 浏览器打开 `http://<host>:8080` 验证：首页版块卡片、**旧帖实时可见（同一套表）**、旧账号密码登录、发帖/回复/通知。
 
-### 步骤四：灰度分流（随机分发到新旧两站）
+### 步骤四：新旧站分离（各自独立入口）
 
-nginx upstream 同时指向两站，默认轮询——每个请求分发到旧站 8081 或新站 8080。**与导入方案不同，两站看到的是同一份数据**，轮询在数据一致性上是安全的：
+> ⚠️ **不要用轮询把两站挂在同一个域名下**。同一域名的静态资源/登录态请求会随机落到不同站点，导致样式丢失、登录"弹回"等串站问题（两站 cookie 与资源路径互不兼容）。灰度必须按下面方式整站分离。
+
+主域名 `bbs.jnsec.org` 保持指向旧站，新站走独立入口，二选一：
+
+**方案 A：子域名 `new.bbs.jnsec.org`（推荐）**
+
+```bash
+# 1) DNS 控制台为 jnsec.org 添加 A 记录：new.bbs → 服务器公网 IP
+# 2) 签发证书（DNS 生效后）
+certbot --nginx -d new.bbs.jnsec.org
+```
 
 ```nginx
 server {
-    listen 80;
-    server_name bbs.jnsec.org;
+    listen 443 ssl http2;
+    server_name new.bbs.jnsec.org;
+    ssl_certificate     /etc/letsencrypt/live/new.bbs.jnsec.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/new.bbs.jnsec.org/privkey.pem;
     client_max_body_size 20m;
-
     location / {
-        proxy_pass http://bbs_backends;
+        proxy_pass http://127.0.0.1:8080;   # 新站
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -196,28 +212,39 @@ server {
 }
 ```
 
+**方案 B：8443 端口（免 DNS 改动，复用主域证书）**
+
+```nginx
+server {
+    listen 8443 ssl;
+    server_name bbs.jnsec.org;
+    ssl_certificate     /etc/letsencrypt/live/bbs.jnsec.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bbs.jnsec.org/privkey.pem;
+    client_max_body_size 20m;
+    location / {
+        proxy_pass http://127.0.0.1:8080;   # 新站
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+云安全组放行 8443 后访问 `https://bbs.jnsec.org:8443`。
+
+> `proxy_set_header Host $host;` 这行必须保留：新站 CSRF 会校验 Origin 与 Host 一致（`.env` 里 `TRUSTED_ORIGINS` 是兜底白名单）。
+
 ```bash
 nginx -t && systemctl reload nginx
 ```
 
-> ⚠️ **仍存在的体验差异**：两站会话独立——用户需在两站分别登录；界面/功能差异（新站无投票、附件下载计数等）。建议尽快进入全量切换。
-
-如希望每个访客**稳定**落在其中一站（同一访客会话不丢），在 upstream 中加一行：
-
-```nginx
-upstream bbs_backends {
-    server 127.0.0.1:8081;   # 旧站
-    server 127.0.0.1:8080;   # 新站
-    hash $remote_addr consistent;   # 按访客 IP 稳定分组：同一访客始终同一站
-}
-```
-
-（同一出口 IP 的一群人会被绑到同一站，是按 IP 分流的固有权衡。）
+分离验收清单（在新站入口上）：样式完好 → 旧账号密码登录 → 旧帖可见 → 发帖/回复 → 在旧站刷新能看到该帖（同库实时互通）。
 
 ### 步骤五：全量切换与回滚
 
-- **全量切换**：注释 upstream 里的 8081 行（或 `proxy_pass http://bbs_new;`），`nginx -s reload`；随后 `docker compose stop php` 并从 compose.yaml 移除 `php` 服务块。
-- **回滚**：upstream 启用 8081 行，`nginx -s reload`——由于两站共用同一套表，回滚**没有数据丢失**（Go 端发的帖 PHP 端直接可见）。
+- **全量切换**：把主域名 443 块的 `proxy_pass` 从 `bbs_old` 改为 `http://127.0.0.1:8080`，`nginx -s reload`；随后 `docker compose stop php` 并从 compose.yaml 移除 `php` 服务块。
+- **回滚**：`proxy_pass` 改回 `bbs_old`，`nginx -s reload`——由于两站共用同一套表，回滚**没有数据丢失**（Go 端发的帖 PHP 端直接可见）。
 
 ### 收尾
 
