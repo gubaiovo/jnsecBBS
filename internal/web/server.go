@@ -72,33 +72,45 @@ func (s *Server) Handler() http.Handler {
 		distPath := strings.TrimPrefix(path, "static/")
 		// index.html 直接输出内容（http.FileServer 会把 /index.html 301 到 ./）
 		if distPath == "index.html" || !strings.Contains(distPath, ".") {
-			index, err := fs.ReadFile(frontend.Dist, "dist/index.html")
-			if err != nil {
-				c.String(http.StatusInternalServerError, "前端未构建：请在 frontend/ 执行 bun run build 后重新编译。")
-				return
-			}
-			c.Data(http.StatusOK, "text/html; charset=utf-8", index)
+			s.serveIndex(c)
 			return
 		}
 		distFS, _ := fs.Sub(frontend.Dist, "dist")
 		if f, err := distFS.Open(distPath); err == nil {
 			if st, err := f.Stat(); err == nil && !st.IsDir() {
+				// vite 产物文件名带内容哈希，可 immutable 长缓存
+				if strings.HasPrefix(path, "static/assets/") {
+					c.Header("Cache-Control", "public, max-age=31536000, immutable")
+				}
 				c.FileFromFS(distPath, http.FS(distFS))
 				return
 			}
+		}
+		// /static/ 下带扩展名的未知路径按 404 处理：不能把 index.html 当
+		// CSS/JS 返回，否则改版后旧 HTML 引用旧哈希文件名时会出现 MIME 不符
+		if strings.HasPrefix(path, "static/") {
+			c.Status(http.StatusNotFound)
+			return
 		}
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
 			c.JSON(http.StatusNotFound, gin.H{"error": "接口不存在。"})
 			return
 		}
-		index, err := fs.ReadFile(frontend.Dist, "dist/index.html")
-		if err != nil {
-			c.String(http.StatusInternalServerError, "前端未构建：请在 frontend/ 执行 bun run build 后重新编译。")
-			return
-		}
-		c.Data(http.StatusOK, "text/html; charset=utf-8", index)
+		s.serveIndex(c)
 	})
 	return r
+}
+
+// serveIndex 输出 SPA 入口。必须 no-cache：浏览器/CDN 缓存的旧 HTML 会引用
+// 已不存在的哈希资源文件，页面会整体塌掉。
+func (s *Server) serveIndex(c *gin.Context) {
+	index, err := fs.ReadFile(frontend.Dist, "dist/index.html")
+	if err != nil {
+		c.String(http.StatusInternalServerError, "前端未构建：请在 frontend/ 执行 bun run build 后重新编译。")
+		return
+	}
+	c.Header("Cache-Control", "no-cache")
+	c.Data(http.StatusOK, "text/html; charset=utf-8", index)
 }
 
 // ---------- 会话中间件 ----------

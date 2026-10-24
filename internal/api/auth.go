@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/png"
 	"io"
+	"log"
 	"net/http"
 	"net/mail"
 	"os"
@@ -72,6 +73,7 @@ func (s *Server) login(c *gin.Context) {
 func (s *Server) startSession(c *gin.Context, u *models.User) {
 	token, err := auth.CreateSession(s.db, u.ID, c.Request.UserAgent(), s.cfg.CookieSecure)
 	if err != nil {
+		log.Printf("[api] CreateSession 失败 user=%s: %v", u.Username, err)
 		fail(c, http.StatusInternalServerError, "登录失败，请重试。")
 		return
 	}
@@ -158,6 +160,7 @@ func (s *Server) register(c *gin.Context) {
 		return tx.Model(&u).Association("Groups").Append(&member)
 	})
 	if err != nil {
+		log.Printf("[api] register 事务失败 username=%s: %v", username, err)
 		fail(c, http.StatusInternalServerError, "注册失败，请重试。")
 		return
 	}

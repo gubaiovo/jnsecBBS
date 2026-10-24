@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -395,6 +396,7 @@ func (s *Server) createDiscussion(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
+		log.Printf("[api] createDiscussion 事务失败 user=%s: %v", u.Username, err)
 		fail(c, http.StatusInternalServerError, "保存失败，请重试。")
 		return
 	}
@@ -480,6 +482,7 @@ func (s *Server) reply(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
+		log.Printf("[api] reply 事务失败 discussion=%d user=%s: %v", d.ID, u.Username, err)
 		fail(c, http.StatusInternalServerError, "保存失败，请重试。")
 		return
 	}
