@@ -54,7 +54,10 @@ func (s *Server) login(c *gin.Context) {
 		return
 	}
 	var u models.User
-	if err := s.db.Preload("Groups").Where("lower(username) = lower(?)", body.Username).First(&u).Error; err != nil ||
+	// Flarum 语义：登录标识可以是用户名或邮箱
+	if err := s.db.Preload("Groups").
+		Where("lower(username) = lower(?) OR lower(email) = lower(?)", body.Username, body.Username).
+		First(&u).Error; err != nil ||
 		!auth.CheckPassword(u.Password, body.Password) {
 		fail(c, http.StatusBadRequest, "用户名或密码错误。")
 		return
