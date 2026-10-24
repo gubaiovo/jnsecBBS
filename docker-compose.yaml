@@ -65,7 +65,8 @@ services:
       JNSEC_TRUSTED_ORIGINS: ${TRUSTED_ORIGINS}
       JNSEC_TRUST_PROXY: "true"
       JNSEC_DATA_DIR: /app/data
-      JNSEC_ASSETS_DIR: ${ASSETS_DIR}
+      # 旧站头像/附件目录。保留内联默认值：缺失时 /assets 路由不注册，旧用户头像会静默丢失
+      JNSEC_ASSETS_DIR: ${ASSETS_DIR:-/flarum/public/assets}
       JNSEC_REGISTRATION: ${REGISTRATION}
       TZ: ${TZ}
     volumes:

@@ -93,6 +93,9 @@ func serveCmd(args []string) {
 	if cfg.SessionSecret == "" || cfg.SessionSecret == "CHANGE-ME-to-a-random-64-char-string" {
 		log.Println("[警告] session_secret 未配置或仍为默认值，生产环境请在 config.yaml 中设置随机密钥。")
 	}
+	if cfg.AssetsDir == "" {
+		log.Println("[警告] JNSEC_ASSETS_DIR 未配置：旧 Flarum 头像/附件（/assets/*）将无法访问，全部回退首字母头像。")
+	}
 	g := openDB(cfg, true)
 
 	srv, err := web.New(cfg, g)
