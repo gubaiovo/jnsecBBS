@@ -1,12 +1,4 @@
-# 三容器编排（同一网络，共享一个 MySQL 实例）：
-#   mysql —— MySQL 5.7，挂 bbsmysql 数据卷（旧 flarum 库原样保留 + 新 bbs 库）
-#   php   —— 旧站 Flarum（灰度期与新站并行；服务名固定为 mysql，
-#            旧 Flarum config.php 的 host='mysql' 无需任何修改即可直连）
-#   app   —— 新站 Go（bbs 库）
-#
-# 使用：
-# - 灰度并行：php 与 app 同时在跑，nginx 分流
-# - 全量切换后：删除或注释 php 服务块，docker compose up -d 即双容器生产形态
+version: '2.4'
 
 services:
   mysql:
@@ -16,8 +8,8 @@ services:
     ports:
       - "127.0.0.1:3306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
-      TZ: ${TZ:-Asia/Shanghai}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      TZ: ${TZ}
     volumes:
       - bbsmysql:/var/lib/mysql
     healthcheck:
@@ -45,7 +37,7 @@ services:
       - wwwdata:/var/www/bbs
       - bbslog:/var/log/apache2
     environment:
-      TZ: ${TZ:-Asia/Shanghai}
+      TZ: ${TZ}
     logging:
       driver: json-file
       options:
@@ -54,26 +46,27 @@ services:
 
   app:
     image: bbs:latest
-    build: .
+    build:
+      context: .
     container_name: bbs-app
     restart: unless-stopped
     depends_on:
       mysql:
         condition: service_healthy
     ports:
-      - "${APP_PORT:-8080}:8080"
+      - "${APP_PORT}:8080"
     environment:
       JNSEC_LISTEN: 0.0.0.0:8080
-      JNSEC_SITE_NAME: ${SITE_NAME:-JNSEC BBS}
+      JNSEC_SITE_NAME: ${SITE_NAME}
       JNSEC_DB_DRIVER: mysql
       JNSEC_DB_DSN: root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/flarum?charset=utf8mb4&parseTime=true&loc=Local
-      JNSEC_SESSION_SECRET: ${SESSION_SECRET:?请在 .env 中设置 SESSION_SECRET}
-      JNSEC_COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      JNSEC_SESSION_SECRET: ${SESSION_SECRET}
+      JNSEC_COOKIE_SECURE: ${COOKIE_SECURE}
       JNSEC_TRUST_PROXY: "true"
       JNSEC_DATA_DIR: /app/data
-      JNSEC_ASSETS_DIR: ${ASSETS_DIR:-/flarum/public/assets}
-      JNSEC_REGISTRATION: ${REGISTRATION:-invite}
-      TZ: ${TZ:-Asia/Shanghai}
+      JNSEC_ASSETS_DIR: ${ASSETS_DIR}
+      JNSEC_REGISTRATION: ${REGISTRATION}
+      TZ: ${TZ}
     volumes:
       - appdata:/app/data
       - wwwdata:/flarum:ro
@@ -96,4 +89,4 @@ volumes:
     external: true
   bbslog:
     external: true
-  appdata:
+  appdata: {}
