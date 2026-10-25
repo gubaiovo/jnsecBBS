@@ -1,215 +1,116 @@
 # JNSEC BBS (Go + React)
 
-[![CI](https://github.com/exzco/BBS/actions/workflows/ci.yml/badge.svg)](https://github.com/exzco/BBS/actions/workflows/ci.yml)
+Go 论坛服务与 React 前端，兼容现有 Flarum 用户、版块、帖子及链接。前端构建产物内嵌于 Go 二进制。未登录仅能访问欢迎页，内容接口要求登录。
 
-原 Flarum（PHP）论坛的重写版：Go 后端（REST API + 单静态二进制）+ Bun/React 前端（Vite + shadcn/ui + Tailwind CSS v4 + lucide-react 图标）。SPA 产物由 Go 二进制直接内嵌伺服，保证旧链接（`/t/{slug}`、`/d/{id}`）与用户密码（bcrypt，含 PHP `$2y$` 前缀）兼容，可直接从 Flarum 数据库原地导入。
+## 当前进度（2026-10-25）
 
-内部论坛语义：未登录仅见欢迎页，版块与帖子内容需登录后访问（前端路由守卫 + 后端接口 401 双层控制）。
+本轮修复：
 
-架构与阶段规划见 [PLAN.md](PLAN.md)。
+- 历史正文实际上是 s9e TextFormatter XML（`<r>` / `<t>`），不是 JSON。`internal/flarum` 负责还原原始 Markdown，保留标记、换行与实体；旧 Go JSON 格式仍可读取。输出通过 goldmark + bluemonday 渲染和消毒。
+- 不存在的头像、资源和 API 返回真实 404，避免 SPA HTML 被误当成图片。
+- Flarum 头像字段实际存储文件名，Go 现在补齐 `/assets/avatars/`，同时兼容已有 `/avatars/`、`/assets/` 和 HTTP(S) URL；头像更新失败时不会误删旧文件。
+- 修正用户组和版块关联的 `group_id` / `tag_id` 映射；SQLite 初始化补齐 `flarum_group_permission`。
+- 增加 `init-db`，可在独立空 MySQL/SQLite 库启动，不必先部署 PHP。命令拒绝任何已有表的数据库。新安装仅预置通用版块，站点名使用配置或后台设置，不再自动植入俱乐部版块。
+- 详情、搜索、个人页、通知和多版块列表统一过滤版块权限；继承父版块权限，发帖与回复授权分开，权限读取失败时拒绝访问。私密扩展内容不对普通内容接口开放。
+- 增加只读 `audit-content`：输出评论 ID 与还原正文的 SHA-256，可与旧 PHP Unparser 比较，无需导出明文帖子。
 
-## 功能
+仍存在的兼容边界（不能视为完整 Flarum 框架替代）：
 
-- 版块（两级 Tag，颜色/描述/排序/按组授权可见与发帖），URL 与 Flarum 一致
-- 帖子/回复（Markdown 编辑器带预览，置顶/锁定/隐藏，编辑记录，分页）
-- 用户（邀请码或验证码注册、头像上传、签名档、用户组：管理员/版主/成员/游客）
-- 通知（回复、@提及、点赞），铃铛未读数实时轮询
-- 帖子点赞、全文搜索（关键词高亮）
-- 管理后台：版块/用户/邀请码/已删除帖/站点设置（含未登录欢迎语）
-- 深色/浅色主题切换（跟随系统）
-- 安全：CSRF（SPA 走 X-CSRF-Token 头）、XSS 白名单消毒（goldmark + bluemonday）、bcrypt、按 IP 限速、HttpOnly 会话
+- 新写入正文采用有效的 s9e `<t>` 文本封装。Go 渲染 Markdown；旧 PHP 站显示原始 Markdown，直到 PHP formatter 重新解析。尚未实现完整 s9e 富文本写入及扩展插件协议。
+- 历史 XML 不回写、不批量替换。新旧站仍共享 Flarum 表，当前无需数据搬迁；这不代表全部 Flarum 扩展已迁移。
+- 旧通知保留在 Flarum 表；Go 通知使用独立 `bbs_notifications`，未导入 PHP 序列化通知。系统事件帖保留在库中，当前 UI 仅展示 comment。
+- Go 上传头像仍存于独立 `appdata`；旧头像通过只读 `wwwdata` 访问。旧 PHP 站对 Go 新上传头像的互通仍需后续处理。
+- 全局权限和第三方权限扩展、历史通知与插件数据需要继续专项核对；不宣称已完成全量安全审计。
 
-## 快速开始（本地开发）
+## 本轮验证与发布
 
-前端（Bun 1.1+）：
+- `go test -race ./...`、`go vet ./...` 通过；最后的静态路由修改另通过 `go test -race ./internal/web` 与 `go vet ./internal/web`。
+- 全部 9,288 条历史评论还原正文的 SHA-256 与原 PHP s9e Unparser 逐条一致；生产全部 12,545 条帖子（包括事件）保留。
+- MySQL 副本验证登录、用户组、历史帖子、Markdown/XSS、发帖、编辑、回复、点赞，以及头像上传/替换/删除与文件清理。独立空 MySQL 库初始化通过，重复初始化拒绝执行。
+- 公网 HTTPS 验证新旧站 Cookie 切换、CSRF、Secure 登录会话、退出、历史帖、PNG 头像、预览、404 与匿名 401。
+- 线上 Go 更新为 `bbs:79b3232`，`bbs:latest` 指向该镜像；PHP/MySQL 未重启。CSRF 密钥已替换为独立随机值，用户若遇到旧页面 CSRF 失败请刷新后重试。
+- 测试写入在隔离数据库中完成；生产临时账号只用于登录和读取，未发布内容。验证后删除测试账号、会话与隔离数据库。
+- 服务器源代码快照位于 `/opt/backup/refactorBBS/releases/20261025` Git worktree；原部署目录中的 `run.sh` 等未提交文件保留。前端资源未修改，继续使用仓库内嵌产物。
 
-```bash
+## 开发与独立安装
+
+```sh
 cd frontend
-bun install
-bun run build     # 产物输出到 internal/frontend/dist，随后被 go:embed 打进二进制
+bun install --frozen-lockfile
+bun run build
+cd ..
+go build -o bbs ./cmd/bbs
+export JNSEC_SESSION_SECRET="$(openssl rand -hex 32)"
+./bbs serve
 ```
 
-后端：
+默认 SQLite `./bbs.db`，首次启动自动建表。前端热更新使用 `cd frontend && bun dev`。管理账号由 `seed-admin` 创建（密码请自行设置）：
 
-```bash
-go build -o bbs.exe ./cmd/bbs
-bbs.exe serve                # 默认 0.0.0.0:8080，SQLite ./bbs.db
-bbs.exe seed-admin -username admin -email admin@example.com -password admin12345
+```sh
+./bbs seed-admin -username admin -email admin@example.com -password '自行设置强密码'
 ```
 
-打开 http://127.0.0.1:8080 。默认注册方式为邀请码：先登录管理员，到 `/admin` → 邀请码 生成。
+独立 MySQL 安装：先创建空数据库和专用用户，配置 `JNSEC_DB_DRIVER=mysql` 与 `JNSEC_DB_DSN`，运行 `./bbs init-db`，再执行 `seed-admin` 和 `serve`。不要对旧 Flarum 库执行 `init-db`。普通 MySQL 启动只检查旧表并创建两张 Go 辅助表，不对旧表运行 GORM AutoMigrate。
 
-前端开发模式（热更新；API 代理到本机 8080 的 Go 服务，见 `vite.config.ts`）：
-
-```bash
-cd frontend && bun dev
+```sh
+go test -race ./...
+go vet ./...
 ```
 
 ## 配置
 
-复制 `config.example.yaml` 为 `config.yaml`。要点：
+配置读取 `config.yaml`，环境变量覆盖 YAML。示例文件只提供占位符，生产密码与密钥必须自行填写；不要覆盖现有生产 `.env`。
 
-| 项 | 说明 |
+| 配置 / 环境变量 | 作用 |
 |---|---|
-| `database.driver` | `sqlite`（默认，本地开发）或 `mysql`（生产） |
-| `database.dsn` | MySQL 示例：`user:pass@tcp(127.0.0.1:3306)/bbs?charset=utf8mb4&parseTime=true&loc=Local` |
-| `session_secret` | 生产必须改为随机 64 位字符串 |
-| `cookie_secure` | HTTPS 反代下设 `true` |
-| `registration` | `invite`（邀请码）或 `open`（验证码开放注册） |
-| `assets_dir` | 旧 Flarum 静态资源目录，设置后 `/assets/*`（头像/附件）继续可访问 |
+| `listen` / `JNSEC_LISTEN` | 默认 `0.0.0.0:8080` |
+| `site_name` / `JNSEC_SITE_NAME` | 无数据库站点标题时的默认名称 |
+| `database.driver` / `JNSEC_DB_DRIVER` | `sqlite` 或 `mysql`，其他值报错 |
+| `database.dsn` / `JNSEC_DB_DSN` | MySQL 示例 `bbs:password@tcp(mysql:3306)/flarum?charset=utf8mb4&parseTime=true&loc=Local` |
+| `session_secret` / `JNSEC_SESSION_SECRET` | 每个站点独立随机密钥，`openssl rand -hex 32` |
+| `cookie_secure` / `JNSEC_COOKIE_SECURE` | HTTPS 为 true；线上 Cloudflare 提供 HTTPS，当前为 true |
+| `trust_proxy` / `JNSEC_TRUST_PROXY` | 仅在受信任网关后启用，应用端口应限制外部访问 |
+| `trusted_origins` / `JNSEC_TRUSTED_ORIGINS` | CSRF 信任来源，逗号分隔 |
+| `data_dir` / `JNSEC_DATA_DIR` | 新头像存储目录 |
+| `assets_dir` / `JNSEC_ASSETS_DIR` | Flarum 静态资源目录，线上 `/flarum/public/assets` |
+| `registration` / `JNSEC_REGISTRATION` | `invite` 或 `open` |
 
-所有配置项均可用 `JNSEC_*` 环境变量覆盖（`JNSEC_DB_DSN`、`JNSEC_SESSION_SECRET`、`JNSEC_ASSETS_DIR` 等），容器部署无需挂载配置文件。
+## 线上部署拓扑
 
-## 生产部署（Docker Compose + 三容器灰度）
+服务器 `139.162.121.96`，当前 Compose 目录 `/opt/backup/refactorBBS/jnsecBBS`，文件为 **`docker-compose.yaml`**。
 
-VPS 上只需 Docker（无需装 Go/Bun）：`git clone` / `git pull` 拉到代码后，`docker compose build` 会在容器内完成前端与后端构建（多阶段 Dockerfile）。
+- `bbs-mysql`：MySQL 5.7，外部卷 `bbsmysql`，生产数据库 `flarum`。
+- `bbs-php`：旧 Flarum，`jnsecbbs:php8.3.36` 为服务器本地镜像，宿主机端口 8081。
+- `bbs-app`：Go，镜像 `bbs:latest`（本轮代码 `79b3232`），仅绑定宿主机 `127.0.0.1:8080`，通过 nginx 访问。
+- `wwwdata` 同时挂给 PHP 的 `/var/www/bbs` 与 Go 的 `/flarum`（只读）；Go 新头像持久化在 `appdata`。
+- 公网由 Cloudflare 提供 HTTPS 并将 HTTP 重定向到 HTTPS；源站 nginx 接收 HTTP，不能据此将 Secure Cookie 关闭。
+- 宿主机 nginx 配置 `/etc/nginx/sites-available/bbs.jnsec.org`，80 端口服务 `bbs.jnsec.org`。
 
-两种取镜像的方式任选：
-- **源码构建**（git 部署路径）：`docker compose build`；
-- **Release 镜像包**：`wget` + `docker load`（见下）。
+当前 nginx 以 Cookie 灰度路由：默认旧 PHP 站；`/switch-to-new` 设置 `site_version=go`，`/switch-to-old` 设置 `site_version=old`，随后 302 到首页。主 `location /` 根据 Cookie 选择 `127.0.0.1:8080` 或 `8081`，转发 Host、X-Real-IP、X-Forwarded-For、X-Forwarded-Proto。新旧站登录会话独立。
 
-`compose.yaml` 为**三容器同一网络**：`mysql`（官方 MySQL 5.7，挂现有数据卷 `bbsmysql`——旧 `flarum` 库原样保留 + 新 `bbs` 库）、`app`（新站，`bbs` 库）、`php`（旧站 Flarum，`flarum` 库，灰度期并行，全量切换后移除）。PHP 与 Go 两个后端**共享同一个 MySQL 实例**，服务名即旧 Flarum `config.php` 的 host（`mysql`），旧站零配置改动。
+本机 VPN 会把目标地址路由到 utun。macOS 可通过 SSH ProxyCommand 的 TCP socket 设置 `IP_BOUND_IF` 绑定实际物理网卡（本次为 en0），同时禁用其他代理；不要仅靠清除 HTTP_PROXY 判断已绕过 VPN。
 
-镜像不发布到任何 Registry，部署 = 从 GitHub Release 下载镜像包，`docker load` 导入本地：
+旧最佳答案扩展的 `best_answer_notified` 为 NOT NULL 且无默认值，Go 建帖会返回 500。仅在具有该列的旧库执行 `deploy/migrations/20261025-best-answer-default.sql`，不要对独立 Go 新库执行该扩展脚本。
 
-```bash
-# 1. 下载 Release 附件中的镜像包并导入（导入后本地得到 bbs:latest）
-wget https://github.com/exzco/BBS/releases/download/v0.1.0/bbs-image-v0.1.0.tar.gz
-docker load -i bbs-image-v0.1.0.tar.gz
+更新前备份数据库、`.env`、nginx 配置并保留旧镜像标签。仅重建/替换 app，避免重启旧 PHP 和 MySQL：
 
-# 2. 配置：.env.example 已按生产环境预填（数据库密码、会话密钥、资产路径），
-#    复制为 .env 即可（若现有数据卷的 root 密码不同，仅需修改 MYSQL_ROOT_PASSWORD）
-cp .env.example .env
-
-# 3. 启动（灰度期 mysql + php + app 三容器；全量切换后移除 php 即双容器）
-docker compose up -d
-docker compose exec app /app/bbs seed-admin -username admin -email admin@example.com -password admin12345
+```sh
+docker compose build app
+docker compose up -d --no-deps app
 ```
 
-说明：
-- `app` 服务使用本地镜像 `bbs:latest`（即上一步 docker load 导入的镜像），不引用任何镜像仓库；`build: .` 仅供有源码的环境自行构建。
-- `.env` 含真实密码与密钥，已被 `.gitignore` 排除，不会上传 GitHub。
-- `mysql` 服务挂载外部数据卷 `bbsmysql`（复用现有 MySQL 数据）；`wwwdata` 卷同时挂给 `app`（只读，旧头像与附件经 `/assets/*` 继续）与 `php`（旧站站点目录）。
-- `php` 使用的 `jnsecbbs:php8.3.36` 镜像只存在于服务器本地，无法从仓库拉取。
+服务器旧版环境可使用 `docker-compose`。若从其他机器交叉编译，必须带上已构建的 `internal/frontend/dist`，目标 `CGO_ENABLED=0 GOOS=linux GOARCH=amd64`，再将二进制装入运行镜像。
 
-## 从 Flarum 到 Go：零迁移并行运行（路线 3）
+本次备份目录：`/opt/backup/bbs-refactor-20261025`。回滚镜像：`bbs:rollback-20261025`。回滚 app：先 `docker tag bbs:rollback-20261025 bbs:latest`，再在原 Compose 目录执行 `docker-compose up -d --no-deps app`。本轮仅为最佳答案扩展列补充默认值 0（见 `deploy/migrations/20261025-best-answer-default.sql`），不改历史值。旧 PHP 与旧 Go 均可保留此默认值运行，回退程序无需恢复数据库；需要撤销默认值时参照 SQL 文件中的回滚语句。
 
-**Go 后端直接读写 Flarum 原表**（`flarum_users`、`flarum_discussions`、`flarum_posts`、`flarum_tags`、`flarum_groups`、`flarum_group_permission`、`flarum_post_likes`、`flarum_access_tokens`、`flarum_settings`），PHP 与 Go 两个后端操作**同一套表**——数据实时一致，**没有导入步骤、没有停机窗口、没有数据分裂**。
+## 目录
 
-要点：
+- `cmd/bbs`：serve、seed-admin、init-db、audit-content。
+- `internal/flarum`：Flarum 存储格式兼容边界。
+- `internal/models`、`internal/db`：数据模型、初始化与兼容检查。
+- `internal/auth`、`internal/api`、`internal/web`：权限、API、会话与静态资源。
+- `internal/markdown`：Markdown 渲染和 HTML 消毒。
+- `frontend`、`internal/frontend/dist`：React 源码与嵌入式产物。
+- `deploy`：网关示例。服务器当前配置以上述实测拓扑为准。
 
-- **密码互认**：同一列的 bcrypt 哈希（含 PHP `$2y$`），旧账号密码直接登录新站。
-- **封禁互认**：flarum/suspend 的 `suspend_until` 即封禁语义，两端互通。
-- **版块权限互认**：版块可见/发帖授权读写 `flarum_group_permission`（`tag{id}.viewDiscussions` 等），管理后台的修改对 PHP 端同样生效。
-- **会话**：token 存储共享 `flarum_access_tokens`；但浏览器登录态是各自 session（PHP session cookie vs Go cookie），灰度期间用户需在两站分别登录。
-- **通知**：Go 端通知存于自建表 `bbs_notifications`（不写 Flarum 的 PHP 序列化格式），从启用日起累计。
-- **Go 专属辅助表**（自动创建，Flarum 不感知）：`bbs_notifications`、`bbs_invite_codes`。
-- **正文的消毒 HTML 不落库**：Go 每次读取时实时渲染（带内存缓存），对表结构零侵入。
-
-> 本地开发同理：`bbs.exe serve` 用 SQLite 时首次启动会按 Flarum 结构自动建表并预置默认版块。
-
-### 步骤一：准备
-
-```bash
-# 1.1 兜底备份（量级很小）
-docker exec bbs104-mysql-fix-php2shell sh -c \
-  'mysqldump -uroot -p"密码" --single-transaction flarum | gzip' > flarum-backup-$(date +%F).sql.gz
-
-# 1.2 确认旧 Flarum 的数据库 host（决定新编排是否零修改兼容）
-docker exec bbs104-php-fix-php2shell grep -n "host" /var/www/bbs/config.php
-# 输出 'host' => 'mysql'（官方容器部署惯例）即与 compose.yaml 服务名一致 ✓
-
-# 1.3 确认旧 Flarum 版本 ≥ 1.0（composer.json require.flarum/core ^1.0）
-```
-
-### 步骤二：切换到三容器编排（旧站对外无感）
-
-```bash
-mkdir -p /opt/bbs && cd /opt/bbs
-# 放入 compose.yaml 与 .env（.env.example 已按生产环境预填；
-# 若现有数据卷的 root 密码不是 123456，修改 MYSQL_ROOT_PASSWORD 即可）
-# 镜像导入见上文「生产部署」第 1 步
-
-# 停止旧 compose 的容器（数据卷由新编排接管）
-docker stop bbs104-php-fix-php2shell bbs104-mysql-fix-php2shell
-
-# 启动 mysql + php（旧站照常对外，数据库换由新容器提供）
-docker compose up -d mysql php
-```
-server {
-    listen 80;
-    server_name bbs.jnsec.org;
-    client_max_body_size 20m;
-
-    # 默认指向旧站（PHP）
-    set $bbs_backend "http://127.0.0.1:8081";
-
-    # ⬇️ 核心开关 1：访问这个路径，切换到新站(Go)
-    location = /switch-to-new {
-        add_header Set-Cookie "site_version=go; Path=/; Max-Age=31536000; SameSite=Lax";
-        return 302 /;
-    }
-
-    # ⬇️ 核心开关 2：访问这个路径，切回旧站(PHP)
-    location = /switch-to-old {
-        add_header Set-Cookie "site_version=old; Path=/; Max-Age=31536000; SameSite=Lax";
-        return 302 /;
-    }
-
-    # 正常业务请求
-    location / {
-        # 如果 Cookie 里带有 site_version=go，则把后端地址修改为新站
-        if ($cookie_site_version = "go") {
-            set $bbs_backend "http://127.0.0.1:8080";
-        }
-
-        # 使用上面动态修改后的变量进行代理
-        proxy_pass $bbs_backend;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-宿主机 nginx 接管 80 端口，写入 `/etc/nginx/sites-available/bbs.jnsec.org`。
-
-### 收尾
-
-- 确认稳定后：`flarum` 库改名保留为历史存档，或维持现状（Go 端持续使用）。
-- Go 端表结构迁移自动执行（幂等），升级只需替换镜像后 `docker compose up -d`。
-
-## CI/CD（GitHub Actions）
-## CI/CD（GitHub Actions）
-
-- **CI**（`.github/workflows/ci.yml`，push/PR 触发）：Go `gofmt` 检查、`go vet`、`go test -race`；前端 `bun install --frozen-lockfile` + `bun run build`（tsc 类型检查）。
-- **CD**（`.github/workflows/release.yml`，推送 `v*` 标签或手动触发）：
-  1. 用仓库内 Dockerfile 多阶段构建镜像（bun 构建前端 → Go 编译）；
-  2. 交叉编译 linux / macOS / Windows 二进制；
-  3. 创建 **GitHub Release**，附件包含：镜像 tar 包（`docker save` 导出，服务器 `docker load` 导入）、三平台二进制压缩包（内含 compose、.env 示例）。
-
-## 目录结构
-
-```
-cmd/bbs/              入口：serve / seed-admin / import-flarum
-frontend/             Bun + Vite + React + shadcn/ui SPA 源码
-internal/frontend/    go:embed 内嵌的 SPA 构建产物（bun run build 输出）
-internal/config/      配置
-internal/models/      GORM 模型
-internal/db/          连接、迁移、默认版块
-internal/auth/        密码（$2y$ 兼容）、会话、权限
-internal/markdown/    goldmark + bluemonday 渲染与 @提及
-internal/slug/        URL slug
-internal/api/         REST JSON 接口（SPA 数据源）
-internal/web/         会话中间件、静态端点（头像/验证码）、SPA 伺服
-internal/importer/    Flarum 导入器
-deploy/               nginx 配置示例
-.github/workflows/    CI 与 Release 工作流
-```
-
-## 开发
-
-```bash
-go build ./... && go vet ./... && go test ./...
-```
+README 记录当前实施进度；PLAN.md 是旧规划，未据此执行本轮工作。
