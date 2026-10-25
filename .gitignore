@@ -11,6 +11,7 @@ mock-assets/
 config.yaml
 config-test.yaml
 .env
+/deploy/nginx.conf
 frontend/node_modules/
 frontend/.npm-cache/
 old_backup_data/
