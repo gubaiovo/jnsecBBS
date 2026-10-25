@@ -45,6 +45,15 @@
 
 以上不等同于全部 Flarum 扩展功能对等或完整安全审计。
 
+### 2026-10-25 晚：CICD 与首页/个人主页改版
+
+- [x] push main 自动部署：CI 全绿 → SSH 强制命令 → run.sh（git pull / build app / up --no-deps / nginx 同步）。Release workflow 移除。
+- [x] SSH 主机指纹踩坑定位：Go SSH 客户端实测协商 ECDSA（ED25519/RSA 均不匹配），结论写入 ci.yml 注释。
+- [x] 首页三栏：板块导航 / 当前板块列表 / 最新排除周报；板块偏好 nanostores 持久化；`?d=` 内嵌文章详情；`/t/{slug}` 重定向选中板块。
+- [x] 个人主页：贡献热力图（北京时间分桶）、实名徽章、博客链接（`bbs_user_profiles`）。
+- [x] Settings 实名/博客表单；Profile 401/404 区分；DSN `loc=UTC` 修正（8 小时偏差根因）。
+- [x] owner 决策入库：`.env.example` 携带真实配置、run.sh 无条件同步配置并启用 nginx 子域名自动化、移除 healthy 断言（曾误报）。
+
 ## 下一阶段：完成迁移验收
 
 1. 持续观察 timer 成功时间、耗时与失败日志；确认每日实际数据变化可同步，源/目标资源引用可访问。
@@ -55,6 +64,11 @@
 
 ## 后续业务与框架工作
 
+- [ ] 在 `bbs` 库执行 `deploy/migrations/20261025-user-profiles.sql`（实名/博客数据表；只读镜像阶段应用不建表，未执行时功能读取为空）。
+- [ ] Cloudflare 为 `new.bbs.jnsec.org` 添加 DNS 记录（橙云代理），子域名分流才完整生效。
+- [ ] 部署 job 末尾 nginx 段的退出码决定 job 红绿：`nginx -t` 失败或 sudo 不可用会把"应用已部署成功"的运行标红，需复核该段在 VPS 的实际行为。
+- [ ] run.sh 在执行中途被自身 `git pull` 替换（脚本变更跨提交时）——小文件整体读入暂无实害，大改脚本时需留意。
+- [ ] 公开仓库内真实密钥（owner 已知悉接受）：如需收敛，VPS 侧轮换密码/SESSION_SECRET 后将 `.env.example` 改回 CHANGE-ME 模板。
 - [ ] 旧通知/事件的 Go 展示与迁移语义。
 - [ ] 全局权限及第三方权限扩展的完整映射。
 - [ ] s9e 富文本写入对等：当前 Go 可写模式使用 `<t>` 封装 Markdown，PHP 暂按文本展示；只读迁移期间不写正文。

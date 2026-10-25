@@ -14,7 +14,7 @@ Go 论坛服务、React 前端与 Flarum 数据兼容层。前端产物内嵌于
 | 网关 | Cloudflare HTTPS → 宿主机 nginx → PHP / Go |
 | 同步 | `jnsec-bbs-sync.timer` 每五分钟将旧库一致性快照同步到新库 |
 
-公网 [切换到新站](https://bbs.jnsec.org/switch-to-new) / [切回旧站](https://bbs.jnsec.org/switch-to-old)。nginx 通过 `site_version` Cookie 灰度路由，默认仍是旧站；两站登录独立。新站页面显示只读提示，并链接到旧站进行发布和修改。
+公网入口已切换为**子域名分流**：`bbs.jnsec.org` → 旧 PHP 站（8081），`new.bbs.jnsec.org` → 新 Go 站（8080）。nginx 配置以仓库 [`deploy/nginx.conf.example`](deploy/nginx.conf.example) 为准，由部署脚本每次自动同步并 reload（需在 Cloudflare 为新子域添加 DNS 记录）；此前的 `site_version` Cookie 灰度已被取代。两站登录独立。新站页面显示只读提示，并链接到旧站进行发布和修改。
 
 新站允许登录、浏览和退出；禁止注册、发布、回复、编辑、点赞、修改账号/头像、标记通知和后台修改。前端隐藏或禁用写入入口，后端统一返回 `403` / `code=read_only`。新站数据库账号 `bbs_go_ro` 仅有 `bbs.*` SELECT，以及 `flarum_access_tokens` 的 INSERT/UPDATE/DELETE；应用启动不执行 DDL 或默认数据写入。
 
@@ -26,7 +26,25 @@ Go 论坛服务、React 前端与 Flarum 数据兼容层。前端产物内嵌于
 - `init-db` 支持独立空 MySQL/SQLite 初始化，拒绝已有表的数据库；新安装不植入俱乐部专用版块。
 - `audit-content` 只读输出评论 ID 与还原正文的 SHA-256，用于迁移核对。
 - 旧库最佳答案扩展缺省值修复位于 `deploy/migrations/20261025-best-answer-default.sql`，仅补充默认值 0，不修改历史记录。
+- 实名与博客链接扩展表 `deploy/migrations/20261025-user-profiles.sql`：只读镜像阶段需在 `bbs` 库手工执行一次（应用只读启动不建表；未执行时读取降级为空）。
 - 生产 CSRF 密钥已轮换；配置模板不再带真实密钥。页面沿用现有布局，补全 Markdown 标题样式与只读提示。
+
+## 首页与个人主页改版（2026-10-25）
+
+- **三栏首页**：左栏九大板块导航（色点 + 帖数，选中态 nanostores 持久化）；中栏当前板块文章列表（默认全部，`/api/recent`；分页加载更多）；右栏"最新文章"排除周报板块（`/api/recent?exclude=weekly`，按名称匹配周报）。
+- **内嵌文章详情**：中栏点击整行在 `?d=<id>` 打开详情（复用整页路由组件，旧链接 `/d/{id}-{slug}` 行为不变），"返回列表"/浏览器后退回列表；右栏最新文章同样内嵌打开。
+- **移除独立板块主页**：`/t/{slug}` 重定向到首页并选中对应板块（含子板块，父板块在左栏高亮）。
+- **个人主页**：GitHub 风格年度贡献热力图（`/api/users/:username/activity`，按北京时间分桶聚合发帖+回复；月份/星期标签、五档色、年份切换）；实名徽章与博客外链（`bbs_user_profiles` 表，编辑入口随只读模式禁用，切写后开放）。
+- 设置页新增实名/博客字段并修复签名框首次加载为空的问题；Profile 页区分 401/404 提示；导航栏最左新增后退按钮。
+
+## 自动部署（CICD）
+
+推送到 `main` 即自动部署：CI（gofmt/vet/test + 前端构建）全绿后，deploy job 经 `appleboy/ssh-action` 连接 VPS 执行强制命令 `cd /opt/backup/refactorBBS/jnsecBBS && chmod +x run.sh && ./run.sh`（git pull → 同步配置 → `docker-compose build app` + `up -d --no-deps app` → nginx 子域名配置同步与 reload）。镜像在 VPS 本地构建：npm 走 npmmirror、Go 走 goproxy.cn。
+
+- GitHub Secrets 四个：`VPS_HOST` / `VPS_USER` / `VPS_SSH_KEY`（部署私钥）/ `VPS_FINGERPRINT`（主机指纹）。**指纹必须是握手实际协商算法的值**：Go SSH 客户端对本服务器实测协商 ECDSA（非 ED25519/RSA），换服务器后需用 Go 客户端重测，勿凭经验猜算法。
+- VPS 侧 authorized_keys 一行锁死：`restrict,command="cd /opt/backup/refactorBBS/jnsecBBS && chmod +x run.sh && ./run.sh",expiry-time="20270125"` + 公钥。任何一次连接等同触发一次部署。
+- `.env.example` 经 owner 决策携带真实生产配置（run.sh 每次部署同步为 `.env`）。**注意：仓库为公开仓库，密钥入库的泄露风险已知悉并接受**；后续如需收敛，在 VPS 轮换密码/密钥后把模板改回 CHANGE-ME 即可。
+- 手动部署兜底不变：VPS 上 `docker-compose build app && docker-compose up -d --no-deps app`。
 
 ## 五分钟同步脚本
 
@@ -91,7 +109,7 @@ export JNSEC_SESSION_SECRET="$(openssl rand -hex 32)"
 
 ## 配置与部署
 
-`config.yaml` 可由 `JNSEC_*` 环境变量覆盖；生产 Compose 使用 `.env`。不要用示例文件覆盖已有 `.env`。
+`config.yaml` 可由 `JNSEC_*` 环境变量覆盖；生产 Compose 使用 `.env`（由 `.env.example` 同步而来，见"自动部署"一节的入库决策说明）。
 
 | 配置 | 用途 |
 |---|---|
@@ -104,7 +122,7 @@ export JNSEC_SESSION_SECRET="$(openssl rand -hex 32)"
 | `JNSEC_ASSETS_DIR` | 旧资源路径，线上 `/flarum/public/assets` |
 | `JNSEC_REGISTRATION` | 非只读时的 invite/open 注册策略 |
 
-服务器 `139.162.121.96`；原 Compose 目录 `/opt/backup/refactorBBS/jnsecBBS`，文件为 `docker-compose.yaml`。本轮镜像为 `bbs:06f0a89`（`bbs:latest` 指向它）；源代码快照位于 `/opt/backup/refactorBBS/releases/20261025-mirror` Git worktree，原目录的用户未提交文件保持不变。部署只替换 app，不重启旧 PHP/MySQL：
+服务器 `139.162.121.96`；Compose 目录 `/opt/backup/refactorBBS/jnsecBBS`（git 克隆，`main` 分支）。日常由 CICD 自动部署；手动兜底只替换 app，不重启旧 PHP/MySQL：
 
 ```sh
 docker-compose build app
