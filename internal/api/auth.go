@@ -335,7 +335,7 @@ type NotificationDTO struct {
 func (s *Server) notifications(c *gin.Context) {
 	u := s.currentUser(c)
 	var notifs []models.Notification
-	s.db.Where("user_id = ?", u.ID).
+	s.db.Where("user_id = ? AND discussion_id IN (?)", u.ID, s.visibleDiscussions(u).Select("flarum_discussions.id").Where("hidden_at IS NULL AND is_approved = ?", true)).
 		Preload("Sender").Preload("Discussion").
 		Order("created_at DESC").Limit(50).Find(&notifs)
 	items := make([]NotificationDTO, 0, len(notifs))

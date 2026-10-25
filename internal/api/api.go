@@ -534,3 +534,32 @@ func (s *Server) limitWith(rl *rateLimiter) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// visibleDiscussions applies visibility before pagination and aggregation, so
+// multi-tag discussions cannot leak via a public tag, search, or user profile.
+func (s *Server) visibleDiscussions(u *models.User) *gorm.DB {
+	query := s.db.Model(&models.Discussion{}).Where("flarum_discussions.is_private = ?", false)
+	var tags []models.Tag
+	if err := s.db.Find(&tags).Error; err != nil {
+		return query.Where("1 = 0")
+	}
+	tp := s.fillTagPerms(tags)
+	if tp.Failed {
+		return query.Where("1 = 0")
+	}
+	denied := []uint{}
+	for i := range tags {
+		if !auth.CanViewTag(u, &tags[i]) {
+			denied = append(denied, tags[i].ID)
+		}
+	}
+	if len(denied) > 0 {
+		query = query.Where("NOT EXISTS (SELECT 1 FROM flarum_discussion_tag access_tag WHERE access_tag.discussion_id = flarum_discussions.id AND access_tag.tag_id IN ?)", denied)
+	}
+	return query
+}
+
+func (s *Server) visiblePosts(u *models.User) *gorm.DB {
+	ids := s.visibleDiscussions(u).Select("flarum_discussions.id").Where("flarum_discussions.hidden_at IS NULL AND flarum_discussions.is_approved = ?", true)
+	return s.db.Model(&models.Post{}).Where("discussion_id IN (?) AND is_private = ?", ids, false)
+}

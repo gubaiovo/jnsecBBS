@@ -25,8 +25,10 @@ type Tag struct {
 	LastPostedUserID *uint      `gorm:"column:last_posted_user_id"`
 	Icon             string     `gorm:"column:icon;type:varchar(100)"`
 
-	ViewGroups []uint `gorm:"-"` // 可见组（来自 flarum_group_permission，查询层填充）
-	PostGroups []uint `gorm:"-"` // 可发帖组
+	ViewGroups  []uint `gorm:"-"` // 可见组（来自 flarum_group_permission，查询层填充）
+	PostGroups  []uint `gorm:"-"` // 可发帖组
+	ReplyGroups []uint `gorm:"-"`
+	Ancestors   []Tag  `gorm:"-"`
 }
 
 func (Tag) TableName() string { return "flarum_tags" }
