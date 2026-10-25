@@ -1,4 +1,4 @@
-import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router"
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useParams } from "react-router"
 import { ThemeProvider } from "next-themes"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { Toaster } from "@/components/ui/sonner"
@@ -7,7 +7,6 @@ import { Navbar } from "@/components/Navbar"
 import { useSession } from "@/lib/session"
 
 import HomePage from "@/pages/Home"
-import TagPage from "@/pages/Tag"
 import DiscussionPage from "@/pages/Discussion"
 import NewPostPage from "@/pages/NewPost"
 import EditPostPage from "@/pages/EditPost"
@@ -39,6 +38,12 @@ function NotFound() {
 }
 
 // 内容类页面守卫：未登录一律跳登录页（携带来源，登录后回跳）
+// 板块主页已并入首页三栏：旧链接 /t/{slug} 重定向到首页并选中对应板块
+function TagRedirect() {
+  const { slug = "" } = useParams()
+  return <Navigate to={`/?board=${encodeURIComponent(slug)}`} replace />
+}
+
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { data, isLoading } = useSession()
   const location = useLocation()
@@ -79,7 +84,7 @@ function Shell() {
         )}
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/t/:slug" element={<RequireAuth><TagPage /></RequireAuth>} />
+          <Route path="/t/:slug" element={<RequireAuth><TagRedirect /></RequireAuth>} />
           <Route path="/d/:idSlug" element={<RequireAuth><DiscussionPage /></RequireAuth>} />
           <Route path="/post" element={<RequireAuth><RequireWritable><NewPostPage /></RequireWritable></RequireAuth>} />
           <Route path="/posts/:id/edit" element={<RequireAuth><RequireWritable><EditPostPage /></RequireWritable></RequireAuth>} />

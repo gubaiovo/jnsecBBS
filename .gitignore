@@ -1,5 +1,6 @@
 /bbs
 /bbs.exe
+/bbs-local*.exe
 data/
 data-test/
 data-demo/

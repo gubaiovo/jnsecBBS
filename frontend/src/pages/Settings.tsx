@@ -10,14 +10,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import type { User } from "@/lib/types"
 
-export default function SettingsPage() {
-  const { data: session } = useSession()
+// 个人资料表单：子组件仅在 me 就绪后挂载，避免 useState 初值在会话
+// 加载完成前被固化为空（旧实现签名框总是空的）。
+function ProfileForm({ me, realName, blogUrl, readOnly }: { me: User; realName: string; blogUrl: string; readOnly: boolean }) {
   const qc = useQueryClient()
-  const me = session?.user
-  const fileRef = useRef<HTMLInputElement>(null)
-  const [bio, setBio] = useState(me?.bio ?? "")
-  const [pwd, setPwd] = useState({ current: "", next: "", confirm: "" })
+  const [bio, setBio] = useState(me.bio ?? "")
+  const [name, setName] = useState(realName ?? "")
+  const [blog, setBlog] = useState(blogUrl ?? "")
 
   const saved = useMutation({
     mutationFn: (body: Record<string, unknown>) => api("/api/me/profile", { json: body }),
@@ -27,6 +28,72 @@ export default function SettingsPage() {
     },
     onError: (e) => toast.error((e as Error).message),
   })
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>个人资料</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="bio">签名档</Label>
+          <Textarea
+            id="bio"
+            value={bio}
+            onChange={(e) => setBio(e.target.value)}
+            rows={3}
+            maxLength={500}
+            disabled={readOnly}
+            placeholder="一句话介绍自己（500 字以内）"
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="realName">实名</Label>
+          <Input
+            id="realName"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={30}
+            disabled={readOnly}
+            placeholder="将展示在个人主页（30 字以内）"
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="blogUrl">博客链接</Label>
+          <Input
+            id="blogUrl"
+            value={blog}
+            onChange={(e) => setBlog(e.target.value)}
+            maxLength={255}
+            disabled={readOnly}
+            placeholder="https://example.com（留空则不展示）"
+          />
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          {readOnly ? (
+            <p className="text-xs text-muted-foreground">迁移期间新站只读，暂不能修改资料。</p>
+          ) : (
+            <span />
+          )}
+          <Button
+            onClick={() => saved.mutate({ bio, realName: name, blogUrl: blog })}
+            disabled={saved.isPending || readOnly}
+          >
+            保存资料
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+export default function SettingsPage() {
+  const { data: session } = useSession()
+  const qc = useQueryClient()
+  const me = session?.user
+  const readOnly = !!session?.readOnly
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [pwd, setPwd] = useState({ current: "", next: "", confirm: "" })
 
   const changePwd = useMutation({
     mutationFn: (body: Record<string, unknown>) => api("/api/me/password", { json: body }),
@@ -52,29 +119,13 @@ export default function SettingsPage() {
     <div className="mx-auto max-w-2xl space-y-5">
       <h1 className="text-xl font-bold">账号设置</h1>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>个人资料</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="bio">签名档</Label>
-            <Textarea
-              id="bio"
-              value={bio}
-              onChange={(e) => setBio(e.target.value)}
-              rows={3}
-              maxLength={500}
-              placeholder="一句话介绍自己（500 字以内）"
-            />
-          </div>
-          <div className="flex justify-end">
-            <Button onClick={() => saved.mutate({ bio })} disabled={saved.isPending}>
-              保存资料
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+      <ProfileForm
+        key={me.id}
+        me={me}
+        realName={session?.realName ?? ""}
+        blogUrl={session?.blogUrl ?? ""}
+        readOnly={readOnly}
+      />
 
       <Card>
         <CardHeader>

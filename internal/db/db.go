@@ -80,6 +80,13 @@ func createBBSTablesMySQL(g *gorm.DB) error {
 			created_at datetime NOT NULL,
 			PRIMARY KEY (code)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+		`CREATE TABLE IF NOT EXISTS bbs_user_profiles (
+			user_id int unsigned NOT NULL,
+			real_name varchar(100) NOT NULL DEFAULT '',
+			blog_url varchar(255) NOT NULL DEFAULT '',
+			updated_at datetime NOT NULL,
+			PRIMARY KEY (user_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	}
 	for _, s := range stmts {
 		if err := g.Exec(s).Error; err != nil {
@@ -163,7 +170,7 @@ func migrateModels(g *gorm.DB) error {
 	if err := g.AutoMigrate(
 		&models.User{}, &models.Group{}, &models.Discussion{}, &models.Post{},
 		&models.PostLike{}, &models.Tag{}, &models.Notification{}, &models.AccessToken{},
-		&models.InviteCode{}, &models.Setting{}, &models.GroupPermission{},
+		&models.InviteCode{}, &models.Setting{}, &models.GroupPermission{}, &models.UserProfile{},
 	); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}

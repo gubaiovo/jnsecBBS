@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react"
 import { Link, useNavigate } from "react-router"
 import { useTheme } from "next-themes"
-import { Bell, LogOut, Moon, Search, SquarePen, Sun } from "lucide-react"
+import { Bell, ChevronLeft, LogOut, Moon, Search, SquarePen, Sun } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Input } from "@/components/ui/input"
 import { api } from "@/lib/api"
@@ -41,6 +41,14 @@ export function Navbar({ siteName }: { siteName: string }) {
       style={{ background: "linear-gradient(90deg, #005661, #00838f)" }}
     >
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4">
+        <button
+          aria-label="后退"
+          title="后退"
+          onClick={() => navigate(-1)}
+          className="shrink-0 text-white/90 transition-colors hover:text-white"
+        >
+          <ChevronLeft className="size-5" />
+        </button>
         <Link to="/" className="shrink-0 text-lg font-bold tracking-tight text-white">
           {siteName}
         </Link>

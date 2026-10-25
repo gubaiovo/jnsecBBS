@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router"
 import {
-  Flag, Heart, Lock, Pencil, Pin, Tag as TagIcon, Trash2,
+  ChevronLeft, Flag, Heart, Lock, Pencil, Pin, Tag as TagIcon, Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
 import { useSession } from "@/lib/session"
@@ -20,8 +20,29 @@ import { timeAgo } from "@/lib/format"
 export default function DiscussionPage() {
   const { idSlug = "" } = useParams()
   const id = Number(idSlug.split("-")[0]) || 0
+  return <DiscussionView id={id} idSlug={idSlug} syncUrl />
+}
+
+// 首页中栏内嵌详情：保持三栏结构，返回按钮回到列表
+export function InlineDiscussion({ id, onBack }: { id: number; onBack: () => void }) {
+  return (
+    <div>
+      <Button variant="ghost" size="sm" className="-ml-2 mb-2 gap-1 text-muted-foreground" onClick={onBack}>
+        <ChevronLeft className="size-4" /> 返回列表
+      </Button>
+      <DiscussionView id={id} />
+    </div>
+  )
+}
+
+function DiscussionView({ id, idSlug = "", syncUrl = false }: { id: number; idSlug?: string; syncUrl?: boolean }) {
   const [params, setParams] = useSearchParams()
-  const page = Number(params.get("page") ?? 1) || 1
+  const [localPage, setLocalPage] = useState(1)
+  const page = syncUrl ? Number(params.get("page") ?? 1) || 1 : localPage
+  const goPage = (p: number) => {
+    if (syncUrl) setParams({ page: String(p) })
+    else setLocalPage(p)
+  }
   const navigate = useNavigate()
   const qc = useQueryClient()
 
@@ -31,14 +52,14 @@ export default function DiscussionPage() {
     retry: false,
   })
 
-  // 旧链接 /d/{id} 规范化为 /d/{id}-{slug}
+  // 旧链接 /d/{id} 规范化为 /d/{id}-{slug}（仅整页路由）
   useEffect(() => {
-    if (data && idSlug !== `${data.discussion.id}-${data.discussion.slug}` && data.discussion.slug) {
+    if (syncUrl && data && idSlug !== `${data.discussion.id}-${data.discussion.slug}` && data.discussion.slug) {
       navigate(discussionUrl(data.discussion.id, data.discussion.slug) + `?page=${page}`, {
         replace: true,
       })
     }
-  }, [data, idSlug, navigate, page])
+  }, [data, idSlug, navigate, page, syncUrl])
 
   const reply = useMutation({
     mutationFn: (content: string) =>
@@ -49,7 +70,7 @@ export default function DiscussionPage() {
       toast.success("回复成功")
       void qc.invalidateQueries({ queryKey: ["discussion", id] })
       void qc.invalidateQueries({ queryKey: ["me"] })
-      setParams({ page: String(r.page) })
+      goPage(r.page)
       setTimeout(() => {
         document.getElementById(`post-${r.postId}`)?.scrollIntoView({ behavior: "smooth" })
       }, 300)
@@ -119,7 +140,7 @@ export default function DiscussionPage() {
         ))}
       </section>
 
-      <Pagination page={data.page} onPage={(p) => setParams({ page: String(p) })} />
+      <Pagination page={data.page} onPage={goPage} />
 
       {data.canReply ? (
         <div className="mt-2 rounded-xl bg-muted/40 p-4">

@@ -65,6 +65,117 @@ func (s *Server) home(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"cards": cards})
 }
 
+// recent 全站最新讨论流（首页主栏与右侧最新栏共用）。
+// exclude=slug1,slug2 排除指定版块（如周报），供侧栏最新列表使用。
+func (s *Server) recent(c *gin.Context) {
+	u := s.currentUser(c)
+	base := s.visibleDiscussions(u).
+		Where("flarum_discussions.hidden_at IS NULL AND flarum_discussions.is_approved = 1")
+	if ex := strings.Split(c.Query("exclude"), ","); len(ex) > 0 {
+		slugs := make([]string, 0, len(ex))
+		for _, s := range ex {
+			if s = strings.TrimSpace(s); s != "" && len(s) <= 100 && len(slugs) < 10 {
+				slugs = append(slugs, s)
+			}
+		}
+		if len(slugs) > 0 {
+			base = base.Where(
+				"NOT EXISTS (SELECT 1 FROM flarum_discussion_tag exdt JOIN flarum_tags ext ON ext.id = exdt.tag_id "+
+					"WHERE exdt.discussion_id = flarum_discussions.id AND ext.slug IN ?)", slugs)
+		}
+	}
+	var total int64
+	base.Session(&gorm.Session{}).Count(&total)
+
+	page := pageParam(c)
+	pages := paginate(int(total), page, perPageDiscussions)
+	var discs []models.Discussion
+	base.Session(&gorm.Session{}).
+		Preload("User").Preload("Tags").Preload("LastPostUser").
+		Order("flarum_discussions.is_sticky DESC, flarum_discussions.last_posted_at DESC").
+		Limit(perPageDiscussions).Offset((page - 1) * perPageDiscussions).Find(&discs)
+
+	items := make([]DiscussionSummaryDTO, 0, len(discs))
+	for i := range discs {
+		items = append(items, s.discussionSummaryDTO(&discs[i], u))
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "page": PageDTO{Page: page, Pages: pages, Total: int(total)}})
+}
+
+// cst 站点受众时区：贡献热力图按北京时间分桶（Flarum 库内以 UTC 存 DATETIME）。
+var cst = time.FixedZone("Asia/Shanghai", 8*3600)
+
+// userActivity 贡献热力图数据：某用户一年内发帖 + 回复按日计数。
+// 年份边界按北京时间计算后转 UTC 再过滤，避免 16:00-24:00 的活动跨日错桶。
+func (s *Server) userActivity(c *gin.Context) {
+	var p models.User
+	if err := s.db.Where("lower(username) = lower(?)", c.Param("username")).First(&p).Error; err != nil {
+		fail(c, http.StatusNotFound, "该用户不存在。")
+		return
+	}
+	viewer := s.currentUser(c)
+	now := time.Now().In(cst)
+	year := now.Year()
+	if v := c.Query("year"); v != "" {
+		if n, err := parseUint(v); err == nil && n >= 2000 && int(n) <= now.Year() {
+			year = int(n)
+		}
+	}
+	start := time.Date(year, 1, 1, 0, 0, 0, 0, cst).UTC()
+	end := time.Date(year+1, 1, 1, 0, 0, 0, 0, cst).UTC()
+
+	canSeeHidden := viewer != nil && viewer.IsModerator()
+	dq := s.visibleDiscussions(viewer).
+		Where("flarum_discussions.user_id = ? AND flarum_discussions.created_at >= ? AND flarum_discussions.created_at < ?", p.ID, start, end)
+	pq := s.visiblePosts(viewer).
+		Where("flarum_posts.user_id = ? AND flarum_posts.created_at >= ? AND flarum_posts.created_at < ? AND flarum_posts.hidden_at IS NULL AND flarum_posts.type = ? AND flarum_posts.is_approved = 1", p.ID, start, end, "comment")
+	if !canSeeHidden {
+		dq = dq.Where("flarum_discussions.hidden_at IS NULL AND flarum_discussions.is_approved = 1")
+	}
+	var times []time.Time
+	dq.Session(&gorm.Session{}).Pluck("flarum_discussions.created_at", &times)
+	pq.Session(&gorm.Session{}).Pluck("flarum_posts.created_at", &times)
+
+	counts := map[string]int{}
+	for _, t := range times {
+		counts[t.In(cst).Format("2006-01-02")]++
+	}
+	type day struct {
+		Date  string `json:"date"`
+		Count int    `json:"count"`
+	}
+	days := make([]day, 0, 366)
+	total := 0
+	for d := time.Date(year, 1, 1, 0, 0, 0, 0, cst); d.Year() == year; d = d.AddDate(0, 0, 1) {
+		key := d.Format("2006-01-02")
+		n := counts[key]
+		total += n
+		days = append(days, day{Date: key, Count: n})
+	}
+	// 可选年份：注册年（北京时间）至今
+	years := []int{}
+	if j := p.JoinedAtOrZero(); !j.IsZero() {
+		for y := j.In(cst).Year(); y <= now.Year(); y++ {
+			if y >= 2000 {
+				years = append(years, y)
+			}
+		}
+	}
+	if len(years) == 0 {
+		years = []int{now.Year()}
+	}
+	c.JSON(http.StatusOK, gin.H{"year": year, "total": total, "days": days, "years": years})
+}
+
+// loadUserProfileExtra 读取用户扩展资料；只读镜像可能尚未建表，缺表降级为空。
+func (s *Server) loadUserProfileExtra(userID uint) (realName, blogURL string) {
+	var extra models.UserProfile
+	if err := s.db.Where("user_id = ?", userID).First(&extra).Error; err == nil {
+		return extra.RealName, extra.BlogURL
+	}
+	return "", ""
+}
+
 func discussionURL(d *models.Discussion) string {
 	if s := d.Slug(); s == "" {
 		return http_disc(d.ID)
@@ -716,8 +827,11 @@ func (s *Server) profile(c *gin.Context) {
 		}
 		rows = append(rows, postRow{Post: s.postDTO(po, nil, viewer), Discussion: s.discussionSummaryPTR(po.Discussion, viewer)})
 	}
+	realName, blogURL := s.loadUserProfileExtra(p.ID)
 	c.JSON(http.StatusOK, gin.H{
 		"user":        userDTO(&p),
+		"realName":    realName,
+		"blogUrl":     blogURL,
 		"discTotal":   total,
 		"discussions": s.summaries(discs, viewer),
 		"posts":       rows,

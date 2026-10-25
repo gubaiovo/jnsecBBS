@@ -68,6 +68,7 @@ func (s *Server) Register(r gin.IRouter) {
 	// 未登录仅开放会话与注册相关接口。
 	authed := g.Group("", s.requireUser())
 	authed.GET("/home", s.home)
+	authed.GET("/recent", s.recent)
 	authed.GET("/groups", s.listGroups)
 	authed.GET("/tags/:slug", s.tagDetail)
 	authed.GET("/tags/:slug/discussions", s.tagDiscussions)
@@ -75,6 +76,7 @@ func (s *Server) Register(r gin.IRouter) {
 	authed.POST("/preview", s.preview)
 	authed.GET("/search", s.search)
 	authed.GET("/users/:username", s.profile)
+	authed.GET("/users/:username/activity", s.userActivity)
 
 	d := authed.Group("/discussions")
 	d.GET("/:id", s.discussionDetail)

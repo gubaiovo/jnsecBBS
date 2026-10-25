@@ -89,6 +89,8 @@ export interface SessionInfo {
   registration: "open" | "invite"
   welcomeText?: string
   unread?: number
+  realName?: string
+  blogUrl?: string
 }
 
 export interface HomeCard {
@@ -108,9 +110,28 @@ export interface DiscussionDetail {
 
 export interface ProfileData {
   user: User
+  realName: string
+  blogUrl: string
   discTotal: number
   discussions: DiscussionSummary[]
   posts: { post: Post; discussion: DiscussionSummary | null }[]
+}
+
+export interface RecentData {
+  items: DiscussionSummary[]
+  page: Page
+}
+
+export interface ActivityDay {
+  date: string
+  count: number
+}
+
+export interface ActivityData {
+  year: number
+  total: number
+  days: ActivityDay[]
+  years: number[]
 }
 
 export interface PostForm {

@@ -1,4 +1,5 @@
-import { Link } from "react-router"
+import { Link, useNavigate } from "react-router"
+import { MessageSquare } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "cn"
@@ -46,6 +47,69 @@ export function GroupBadges({ user }: { user: User }) {
           </Badge>
         ))}
     </>
+  )
+}
+
+// 紧凑行（首页最新流）：整行可点进入详情；onOpen 存在时交给外层内嵌渲染
+export function DiscussionRowCompact({
+  d,
+  onOpen,
+}: {
+  d: DiscussionSummary
+  onOpen?: (id: number) => void
+}) {
+  const navigate = useNavigate()
+  const open = () => (onOpen ? onOpen(d.id) : navigate(`/d/${d.id}-${d.slug}`))
+  return (
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={(e) => e.key === "Enter" && open()}
+      className="flex cursor-pointer items-center gap-3 border-b border-border/50 px-2 py-2 last:border-b-0 hover:bg-muted/40"
+    >
+      <Link
+        to={`/u/${d.author?.username ?? ""}`}
+        onClick={(e) => e.stopPropagation()}
+        className="shrink-0"
+      >
+        <UserAvatar user={d.author} className="size-7" />
+      </Link>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          {d.isSticky && (
+            <span className="shrink-0 rounded bg-orange-500/10 px-1 py-px text-[10px] font-semibold text-orange-600 dark:text-orange-400">
+              置顶
+            </span>
+          )}
+          {d.isLocked && (
+            <span className="shrink-0 rounded bg-blue-500/10 px-1 py-px text-[10px] font-semibold text-blue-600 dark:text-blue-400">
+              锁
+            </span>
+          )}
+          <span className="truncate text-sm font-medium text-foreground">{d.title}</span>
+        </div>
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="max-w-28 shrink-0 truncate">{d.author?.username}</span>
+          {d.tags.slice(0, 2).map((t) => (
+            <span
+              key={t.id}
+              className="hidden shrink-0 rounded bg-secondary/60 px-1.5 py-px text-[10px] text-secondary-foreground sm:inline"
+            >
+              {t.name}
+            </span>
+          ))}
+          <span className="shrink-0">· {timeAgo(d.lastPostedAt)}</span>
+        </div>
+      </div>
+      <div
+        className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
+        title={`${d.commentCount} 回复`}
+      >
+        <MessageSquare className="size-3.5" />
+        {d.commentCount}
+      </div>
+    </div>
   )
 }
 

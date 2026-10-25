@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,9 @@ func (s *Server) me(c *gin.Context) {
 		var unread int64
 		s.db.Model(&models.Notification{}).Where("user_id = ? AND read_at IS NULL", u.ID).Count(&unread)
 		resp["unread"] = unread
+		realName, blogURL := s.loadUserProfileExtra(u.ID)
+		resp["realName"] = realName
+		resp["blogUrl"] = blogURL
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -189,7 +193,9 @@ func (s *Server) logout(c *gin.Context) {
 func (s *Server) updateProfile(c *gin.Context) {
 	u := s.currentUser(c)
 	var body struct {
-		Bio string `json:"bio"`
+		Bio      string  `json:"bio"`
+		RealName *string `json:"realName"`
+		BlogURL  *string `json:"blogUrl"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		fail(c, http.StatusBadRequest, "请求格式错误。")
@@ -200,7 +206,38 @@ func (s *Server) updateProfile(c *gin.Context) {
 		bio = string([]rune(bio)[:500])
 	}
 	s.db.Model(u).Update("bio", bio)
-	c.JSON(http.StatusOK, gin.H{"user": userDTO(u)})
+
+	// 扩展资料（实名/博客）：仅在请求携带对应字段时更新，支持传空串清除
+	if body.RealName != nil || body.BlogURL != nil {
+		existingReal, existingBlog := s.loadUserProfileExtra(u.ID)
+		realName, blogURL := existingReal, existingBlog
+		if body.RealName != nil {
+			realName = strings.TrimSpace(*body.RealName)
+			if n := len([]rune(realName)); n > 30 {
+				fail(c, http.StatusBadRequest, "实名最长 30 个字。")
+				return
+			}
+		}
+		if body.BlogURL != nil {
+			blogURL = strings.TrimSpace(*body.BlogURL)
+			if blogURL != "" {
+				parsed, err := url.Parse(blogURL)
+				if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || len(blogURL) > 255 {
+					fail(c, http.StatusBadRequest, "博客链接需为 http(s) 地址。")
+					return
+				}
+			}
+		}
+		if err := s.db.Save(&models.UserProfile{
+			UserID: u.ID, RealName: realName, BlogURL: blogURL, UpdatedAt: time.Now(),
+		}).Error; err != nil {
+			log.Printf("[api] updateProfile 扩展资料保存失败 user=%s: %v", u.Username, err)
+			fail(c, http.StatusInternalServerError, "保存失败，请重试。")
+			return
+		}
+	}
+	realName, blogURL := s.loadUserProfileExtra(u.ID)
+	c.JSON(http.StatusOK, gin.H{"user": userDTO(u), "realName": realName, "blogUrl": blogURL})
 }
 
 func (s *Server) updatePassword(c *gin.Context) {
