@@ -11,7 +11,7 @@ docker-compose up -d --no-deps app
 i=0
 while [ "$(docker inspect -f '{{.State.Health.Status}}' bbs-app 2>/dev/null)" != "healthy" ]; do
   i=$((i + 1))
-  if [ "$i" -gt 2 ]; then
+  if [ "$i" -gt 30 ]; then
     echo "bbs-app 未在超时内变为 healthy，最近日志：" >&2
     docker logs --tail 50 bbs-app >&2 || true
     exit 1
