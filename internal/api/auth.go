@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"image/png"
 	"io"
@@ -22,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/csrf"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // me 当前会话信息：用户 + CSRF token + 站点设置。
@@ -205,39 +207,60 @@ func (s *Server) updateProfile(c *gin.Context) {
 	if len([]rune(bio)) > 500 {
 		bio = string([]rune(bio)[:500])
 	}
-	s.db.Model(u).Update("bio", bio)
-
-	// 扩展资料（实名/博客）：仅在请求携带对应字段时更新，支持传空串清除
-	if body.RealName != nil || body.BlogURL != nil {
-		existingReal, existingBlog := s.loadUserProfileExtra(u.ID)
-		realName, blogURL := existingReal, existingBlog
-		if body.RealName != nil {
-			realName = strings.TrimSpace(*body.RealName)
-			if n := len([]rune(realName)); n > 30 {
-				fail(c, http.StatusBadRequest, "实名最长 30 个字。")
-				return
-			}
-		}
-		if body.BlogURL != nil {
-			blogURL = strings.TrimSpace(*body.BlogURL)
-			if blogURL != "" {
-				parsed, err := url.Parse(blogURL)
-				if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || len(blogURL) > 255 {
-					fail(c, http.StatusBadRequest, "博客链接需为 http(s) 地址。")
-					return
-				}
-			}
-		}
-		if err := s.db.Save(&models.UserProfile{
-			UserID: u.ID, RealName: realName, BlogURL: blogURL, UpdatedAt: time.Now(),
-		}).Error; err != nil {
-			log.Printf("[api] updateProfile 扩展资料保存失败 user=%s: %v", u.Username, err)
-			fail(c, http.StatusInternalServerError, "保存失败，请重试。")
+	var realName, blogURL string
+	if body.RealName != nil {
+		realName = strings.TrimSpace(*body.RealName)
+		if len([]rune(realName)) > 30 {
+			fail(c, http.StatusBadRequest, "实名最长 30 个字。")
 			return
 		}
 	}
-	realName, blogURL := s.loadUserProfileExtra(u.ID)
-	c.JSON(http.StatusOK, gin.H{"user": userDTO(u), "realName": realName, "blogUrl": blogURL})
+	if body.BlogURL != nil {
+		blogURL = strings.TrimSpace(*body.BlogURL)
+		if blogURL != "" {
+			parsed, err := url.Parse(blogURL)
+			if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || len(blogURL) > 255 {
+				fail(c, http.StatusBadRequest, "博客链接需为 http(s) 地址。")
+				return
+			}
+		}
+	}
+
+	var extra models.UserProfile
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Do not mutate the session user until the whole transaction commits.
+		if err := tx.Model(&models.User{}).Where("id = ?", u.ID).Update("bio", bio).Error; err != nil {
+			return err
+		}
+		if body.RealName != nil || body.BlogURL != nil {
+			columns := []string{"updated_at"}
+			if body.RealName != nil {
+				columns = append(columns, "real_name")
+			}
+			if body.BlogURL != nil {
+				columns = append(columns, "blog_url")
+			}
+			// Update only supplied fields, preserving concurrent changes to others.
+			profile := models.UserProfile{UserID: u.ID, RealName: realName, BlogURL: blogURL, UpdatedAt: time.Now()}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "user_id"}},
+				DoUpdates: clause.AssignmentColumns(columns),
+			}).Create(&profile).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("user_id = ?", u.ID).First(&extra).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		log.Printf("[api] updateProfile 保存失败 user=%s: %v", u.Username, err)
+		fail(c, http.StatusInternalServerError, "保存失败，请重试。")
+		return
+	}
+	u.Bio = bio
+	c.JSON(http.StatusOK, gin.H{"user": userDTO(u), "realName": extra.RealName, "blogUrl": extra.BlogURL})
 }
 
 func (s *Server) updatePassword(c *gin.Context) {
