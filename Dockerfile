@@ -12,10 +12,8 @@ RUN npm install --legacy-peer-deps
 # 复制前端所有源码
 COPY frontend/ ./
 
-# 【关键修改 1】：容错构建。
-# 先尝试运行 tsc 检查，如果报错（|| true）不中断流程，继续执行 vite build 生成静态文件。
-RUN npx tsc -b || true
-RUN npx vite build
+# Type errors must stop the image build.
+RUN npm run build
 
 # --- Go 编译阶段 ---
 FROM golang:1.25-alpine AS build

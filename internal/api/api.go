@@ -44,6 +44,13 @@ func New(cfg *config.Config, g *gorm.DB) *Server {
 // Register 挂载全部 API 路由。
 func (s *Server) Register(r gin.IRouter) {
 	g := r.Group("/api")
+	g.Use(func(c *gin.Context) {
+		if s.cfg.ReadOnly && c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead && c.Request.Method != http.MethodOptions && c.Request.URL.Path != "/api/auth/login" && c.Request.URL.Path != "/api/auth/logout" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "迁移期间新站只读，请前往旧站进行修改。", "code": "read_only"})
+			return
+		}
+		c.Next()
+	})
 	g.GET("/me", s.me)
 	g.GET("/auth/captcha", s.captchaNew)
 	g.POST("/auth/login", s.limitWith(authLimiter), s.login)
@@ -281,7 +288,7 @@ func (s *Server) tagDTO(t *models.Tag, u *models.User) TagDTO {
 		ID: t.ID, Name: t.Name, Slug: t.Slug, Description: t.Description,
 		Color: t.Color, Position: derefInt(t.Position), ParentID: t.ParentID,
 		DiscussionsCount: t.DiscussionsCount,
-		CanPost:          auth.CanPostTag(u, t),
+		CanPost:          !s.cfg.ReadOnly && auth.CanPostTag(u, t),
 		CanView:          auth.CanViewTag(u, t),
 	}
 }
@@ -344,8 +351,8 @@ func (s *Server) postDTO(p *models.Post, likedSet map[uint]bool, u *models.User)
 		Content: p.Markdown(), HTML: s.renderPostHTML(p),
 		LikeCount: p.LikeCount, Liked: likedSet[p.ID],
 		CreatedAt: p.CreatedAt, EditedAt: p.EditedAt, Hidden: p.HiddenAt != nil,
-		CanEdit: auth.CanEditPost(u, p),
-		CanHide: u != nil && (u.IsModerator() || (p.UserID != nil && *p.UserID == u.ID)),
+		CanEdit: !s.cfg.ReadOnly && auth.CanEditPost(u, p),
+		CanHide: !s.cfg.ReadOnly && u != nil && (u.IsModerator() || (p.UserID != nil && *p.UserID == u.ID)),
 	}
 	dto.Discussion.ID = p.DiscussionID
 	return dto

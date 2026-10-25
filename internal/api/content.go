@@ -151,7 +151,7 @@ func (s *Server) tagDetail(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"tag":     t,
-		"canPost": auth.CanPostTag(u, tag),
+		"canPost": !s.cfg.ReadOnly && auth.CanPostTag(u, tag),
 	})
 }
 
@@ -287,7 +287,7 @@ func (s *Server) discussionDetail(c *gin.Context) {
 		dto.Discussion.Slug = d.Slug()
 		views = append(views, dto)
 	}
-	canReply := u != nil && !d.IsLocked
+	canReply := !s.cfg.ReadOnly && u != nil && !d.IsLocked
 	for _, t := range d.Tags {
 		if !auth.CanReplyTag(u, &t) {
 			canReply = false
@@ -305,7 +305,7 @@ func (s *Server) discussionDetail(c *gin.Context) {
 		"posts":      views,
 		"page":       PageDTO{Page: page, Pages: pages, Total: d.CommentCount},
 		"canReply":   canReply,
-		"isMod":      isMod,
+		"isMod":      isMod && !s.cfg.ReadOnly,
 		"editorTags": editorTags,
 	})
 }

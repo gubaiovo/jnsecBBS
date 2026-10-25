@@ -62,7 +62,7 @@ export default function LoginPage() {
               登录
             </Button>
           </form>
-          {session?.registration === "open" && (
+          {!session?.readOnly && session?.registration === "open" && (
             <p className="mt-4 text-center text-sm text-muted-foreground">
               还没有账号？<Link to="/register" className="text-primary hover:underline">立即注册</Link>
             </p>

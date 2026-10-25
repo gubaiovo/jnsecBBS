@@ -28,6 +28,7 @@ func (s *Server) me(c *gin.Context) {
 	u := s.currentUser(c)
 	resp := gin.H{
 		"user":         userDTO(u),
+		"readOnly":     s.cfg.ReadOnly,
 		"csrfToken":    csrf.Token(c.Request),
 		"siteName":     s.settingValue(models.SettingKeySiteName),
 		"registration": s.settingValue(models.SettingKeyRegistration),
@@ -79,7 +80,9 @@ func (s *Server) startSession(c *gin.Context, u *models.User) {
 	}
 	auth.SetSessionCookie(c.Writer, token, s.cfg.CookieSecure)
 	now := time.Now()
-	s.db.Model(u).Update("last_seen_at", &now)
+	if !s.cfg.ReadOnly {
+		s.db.Model(u).Update("last_seen_at", &now)
+	}
 	var unread int64
 	s.db.Model(&models.Notification{}).Where("user_id = ? AND read_at IS NULL", u.ID).Count(&unread)
 	c.JSON(http.StatusOK, gin.H{"user": userDTO(u), "unread": unread, "csrfToken": csrf.Token(c.Request)})

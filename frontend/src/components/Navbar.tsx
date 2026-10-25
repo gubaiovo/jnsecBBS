@@ -66,12 +66,12 @@ export function Navbar({ siteName }: { siteName: string }) {
 
           {user ? (
             <>
-              <Link
+              {!session?.readOnly && <Link
                 to="/post"
                 className="hidden items-center gap-1 text-sm font-medium text-white/95 hover:text-white hover:underline sm:inline-flex"
               >
                 <SquarePen className="size-4" /> 发帖
-              </Link>
+              </Link>}
               <Link to="/notifications" className="relative text-white/95 hover:text-white" aria-label="通知">
                 <Bell className="size-5" />
                 {unread > 0 && (
@@ -99,9 +99,9 @@ export function Navbar({ siteName }: { siteName: string }) {
             </>
           ) : (
             <>
-              <Link to="/register" className="text-sm text-white/90 hover:text-white hover:underline">
+              {!session?.readOnly && <Link to="/register" className="text-sm text-white/90 hover:text-white hover:underline">
                 注册
-              </Link>
+              </Link>}
               <Link to="/login" className="text-sm text-white/90 hover:text-white hover:underline">
                 登录
               </Link>

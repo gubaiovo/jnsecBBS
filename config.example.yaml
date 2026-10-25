@@ -18,3 +18,6 @@ database:
 registration: "invite"
 assets_dir: "/flarum/public/assets"
 log_level: "info"
+
+# Enable during one-way old-to-new data synchronization.
+read_only: true

@@ -82,6 +82,12 @@ func openDB(cfg *config.Config, seed bool) *gorm.DB {
 	if err != nil {
 		log.Fatalf("连接数据库失败: %v", err)
 	}
+	if cfg.ReadOnly {
+		if err := db.CheckReadOnly(g); err != nil {
+			log.Fatalf("只读数据库校验失败: %v", err)
+		}
+		return g
+	}
 	if err := db.Migrate(g, seed); err != nil {
 		log.Fatalf("数据库迁移失败: %v", err)
 	}
@@ -164,6 +170,9 @@ func seedAdminCmd(args []string) {
 	password := fs.String("password", "", "密码（至少 8 位）")
 	_ = fs.Parse(args)
 	cfg := loadCfg([]string{"-c", *cfgPath})
+	if cfg.ReadOnly {
+		log.Fatal("只读模式禁止创建或修改管理员")
+	}
 	g := openDB(cfg, true)
 
 	if *username == "" || *email == "" || len(*password) < 8 {

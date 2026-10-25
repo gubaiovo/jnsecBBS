@@ -169,3 +169,16 @@ func migrateModels(g *gorm.DB) error {
 	}
 	return nil
 }
+
+// CheckReadOnly verifies an initialized mirror without DDL or seed writes.
+func CheckReadOnly(g *gorm.DB) error {
+	if err := ensureMySQLCompatibility(g); err != nil {
+		return err
+	}
+	for _, table := range []string{"bbs_notifications", "bbs_invite_codes"} {
+		if err := g.Exec("SELECT 1 FROM `" + table + "` LIMIT 1").Error; err != nil {
+			return fmt.Errorf("read-only database missing %s", table)
+		}
+	}
+	return nil
+}

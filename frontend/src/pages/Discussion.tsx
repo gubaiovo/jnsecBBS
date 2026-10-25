@@ -5,6 +5,7 @@ import {
   Flag, Heart, Lock, Pencil, Pin, Tag as TagIcon, Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
+import { useSession } from "@/lib/session"
 import { api, discussionUrl } from "@/lib/api"
 import type { DiscussionDetail, Post } from "@/lib/types"
 import { MarkdownBody } from "@/components/MarkdownBody"
@@ -191,6 +192,7 @@ function ModBar({
 }
 
 function PostItem({ p }: { p: Post }) {
+  const { data: session } = useSession()
   const qc = useQueryClient()
   const like = useMutation({
     mutationFn: () => api<{ liked: boolean; likeCount: number }>(`/api/posts/${p.id}/like`, { method: "POST" }),
@@ -246,6 +248,7 @@ function PostItem({ p }: { p: Post }) {
           </button>
         )}
         <button
+          disabled={session?.readOnly}
           onClick={() => like.mutate()}
           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-muted-foreground transition-colors hover:bg-rose-500/10 hover:text-rose-600 ${
             p.liked ? "bg-rose-500/10 font-semibold text-rose-600" : ""
