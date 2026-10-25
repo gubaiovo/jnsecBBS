@@ -65,19 +65,30 @@ func (s *Server) Handler() http.Handler {
 	// 其余路径回退 index.html（React Router 接管）
 	r.NoRoute(func(c *gin.Context) {
 		path := strings.TrimPrefix(c.Request.URL.Path, "/")
+		// Missing API/media URLs must not fall back to the SPA with status 200.
+		if strings.HasPrefix(path, "api/") || path == "api" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "接口不存在。"})
+			return
+		}
+		if strings.HasPrefix(path, "assets/") || strings.HasPrefix(path, "avatars/") {
+			c.Status(http.StatusNotFound)
+			return
+		}
 		if path == "" {
 			path = "index.html"
 		}
 		// vite base=/static/：URL 带 /static 前缀，但产物在 dist 根下
 		distPath := strings.TrimPrefix(path, "static/")
 		// index.html 直接输出内容（http.FileServer 会把 /index.html 301 到 ./）
-		if distPath == "index.html" || !strings.Contains(distPath, ".") {
+		if distPath == "index.html" || (!strings.HasPrefix(path, "static/") && !strings.Contains(distPath, ".")) {
 			s.serveIndex(c)
 			return
 		}
 		distFS, _ := fs.Sub(frontend.Dist, "dist")
 		if f, err := distFS.Open(distPath); err == nil {
-			if st, err := f.Stat(); err == nil && !st.IsDir() {
+			st, err := f.Stat()
+			_ = f.Close()
+			if err == nil && !st.IsDir() {
 				// vite 产物文件名带内容哈希，可 immutable 长缓存
 				if strings.HasPrefix(path, "static/assets/") {
 					c.Header("Cache-Control", "public, max-age=31536000, immutable")
@@ -90,10 +101,6 @@ func (s *Server) Handler() http.Handler {
 		// CSS/JS 返回，否则改版后旧 HTML 引用旧哈希文件名时会出现 MIME 不符
 		if strings.HasPrefix(path, "static/") {
 			c.Status(http.StatusNotFound)
-			return
-		}
-		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
-			c.JSON(http.StatusNotFound, gin.H{"error": "接口不存在。"})
 			return
 		}
 		s.serveIndex(c)
