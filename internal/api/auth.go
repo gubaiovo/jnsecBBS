@@ -243,8 +243,12 @@ func (s *Server) updatePassword(c *gin.Context) {
 func (s *Server) updateAvatar(c *gin.Context) {
 	u := s.currentUser(c)
 	if c.PostForm("action") == "remove" {
-		s.removeAvatarFile(u.AvatarURL)
-		s.db.Model(u).Update("avatar_url", "")
+		old := u.AvatarURL
+		if err := s.db.Model(u).Update("avatar_url", "").Error; err != nil {
+			fail(c, http.StatusInternalServerError, "删除头像失败。")
+			return
+		}
+		s.removeAvatarFile(old)
 		c.JSON(http.StatusOK, gin.H{"avatar": avatarURL(u)})
 		return
 	}
@@ -291,8 +295,12 @@ func (s *Server) updateAvatar(c *gin.Context) {
 	old := u.AvatarURL
 	// 写入 flarum 的 avatar_url：指向新站自己的头像路由（data/avatars 由 app 伺服）
 	url := "/avatars/" + name + ".png"
-	s.db.Model(u).Update("avatar_url", url)
-	s.removeAvatarFile(strings.TrimPrefix(old, "/avatars/"))
+	if err := s.db.Model(u).Update("avatar_url", url).Error; err != nil {
+		_ = os.Remove(dest)
+		fail(c, http.StatusInternalServerError, "保存头像失败。")
+		return
+	}
+	s.removeAvatarFile(old)
 	c.JSON(http.StatusOK, gin.H{"avatar": url})
 }
 

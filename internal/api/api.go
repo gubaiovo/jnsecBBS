@@ -3,8 +3,10 @@ package api
 import (
 	"hash/fnv"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -245,9 +247,19 @@ func avatarURL(u *models.User) string {
 		name = u.Username
 	}
 	if u.AvatarURL != "" {
-		return u.AvatarURL
+		value := u.AvatarURL
+		if strings.HasPrefix(value, "/assets/") || strings.HasPrefix(value, "/avatars/") {
+			return value
+		}
+		if parsed, err := url.Parse(value); err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != "" {
+			return value
+		}
+		// Flarum persists a basename, not the public avatar URL.
+		if !strings.ContainsAny(value, "/\\:") && value != "." && value != ".." {
+			return "/assets/avatars/" + url.PathEscape(value)
+		}
 	}
-	return "/avatar/" + name + ".svg"
+	return "/avatar/" + url.PathEscape(name) + ".svg"
 }
 
 type TagDTO struct {
