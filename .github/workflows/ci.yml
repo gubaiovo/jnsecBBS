@@ -67,6 +67,11 @@ jobs:
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
+      # VPS 侧 authorized_keys 用 restrict + 强制命令锁定为
+      # cd /opt/backup/refactorBBS/jnsecBBS && chmod +x run.sh && ./run.sh
+      # 此处发送的命令内容仅作说明，实际执行以 VPS 侧锁定为准。
+      # fingerprint 必须是握手实际协商算法的主机指纹：Go SSH 客户端对这台
+      # VPS 实测协商出 ECDSA；换服务器后需用 Go 客户端重测，勿凭经验猜算法。
       - name: SSH 部署
         if: steps.creds.outputs.ready == 'true'
         uses: appleboy/ssh-action@v1
@@ -75,7 +80,6 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           fingerprint: ${{ secrets.VPS_FINGERPRINT }}
-          script_stop: true
           command_timeout: 30m
           script: |
             cd /opt/backup/refactorBBS/jnsecBBS
