@@ -87,7 +87,7 @@ class Mirror:
                 self.source, *tables]
         with path.open("wb") as out:
             result = subprocess.run(client_command(self.container, "mysqldump", args),
-                                    stdout=out, stderr=subprocess.PIPE, timeout=240)
+                                    stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.PIPE, timeout=240)
         if result.returncode:
             raise RuntimeError("source snapshot failed; target data unchanged")
 

@@ -2,6 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import shlex
 import tempfile
 import time
 import unittest
@@ -39,6 +40,11 @@ class MySQLIntegration(unittest.TestCase):
                              "CREATE TABLE flarum_access_tokens (id INT PRIMARY KEY,token VARCHAR(100)) ENGINE=InnoDB;"
                              "INSERT INTO flarum_posts VALUES (1,'中文 & <tag>'),(2,'deleted');", source)
                 subprocess.run(args + ['--initialize'], check=True)
+                # Docker's interactive stdin must not consume a caller's SSH
+                # shell script and silently discard commands after the sync.
+                shell = shlex.join(args) + "\nprintf 'SYNC_STDIN_PRESERVED\\n'\n"
+                result = subprocess.run(['bash'], input=shell.encode(), capture_output=True, check=True)
+                self.assertIn(b'SYNC_STDIN_PRESERVED', result.stdout)
                 mirror.mysql("INSERT INTO flarum_access_tokens VALUES(1,'session');", target)
                 mirror.mysql("UPDATE flarum_posts SET content='edited' WHERE id=1; DELETE FROM flarum_posts WHERE id=2; INSERT INTO flarum_posts VALUES(3,'new');", source)
                 subprocess.run(args, check=True)
