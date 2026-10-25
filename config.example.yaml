@@ -13,7 +13,7 @@ trusted_origins:
 
 database:
   driver: "mysql"
-  dsn: "bbs:CHANGE-ME@tcp(127.0.0.1:3306)/flarum?charset=utf8mb4&parseTime=true&loc=Local"
+  dsn: "bbs_go_ro:CHANGE-ME@tcp(127.0.0.1:3306)/bbs?charset=utf8mb4&parseTime=true&loc=Local"
 
 registration: "invite"
 assets_dir: "/flarum/public/assets"
