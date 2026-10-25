@@ -36,7 +36,7 @@ Go 论坛服务、React 前端与 Flarum 数据兼容层。前端产物内嵌于
 
 1. 检查源/目标表集合、列和索引结构，所有表必须为 InnoDB；结构变化时停止并保留上次成功数据，不能静默遗漏新扩展表。
 2. 使用 `mysqldump --single-transaction` 获取一致性快照；快照临时文件权限受限，结束后删除。
-3. 目标端在单个事务内 DELETE + INSERT，禁用导入触发器复制；不使用 TRUNCATE、LOCK TABLES 或 `--force`。失败自动回滚，读取方看到提交前或提交后的完整版本。
+3. 目标端在单个事务内 DELETE + INSERT；初始化不复制源触发器，避免重复执行业务逻辑。不使用 TRUNCATE、LOCK TABLES 或 `--force`。失败自动回滚，读取方看到提交前或提交后的完整版本。
 4. 以旧库为准同步新增、修改和删除。**会覆盖新库论坛数据，必须保持只读模式。**
 5. 保留目标 `flarum_access_tokens`，新站会话不会每五分钟消失。该表只复制结构，不复制旧站会话；拆库后的首次访问需要重新登录。
 6. 其他 34 张表全部复制，包括帖子、用户、关系表、旧通知、扩展记录和已有 Go 辅助数据。保存到新库不等于新 UI 已支持每一种扩展。
@@ -104,7 +104,7 @@ export JNSEC_SESSION_SECRET="$(openssl rand -hex 32)"
 | `JNSEC_ASSETS_DIR` | 旧资源路径，线上 `/flarum/public/assets` |
 | `JNSEC_REGISTRATION` | 非只读时的 invite/open 注册策略 |
 
-服务器 `139.162.121.96`；原 Compose 目录 `/opt/backup/refactorBBS/jnsecBBS`，文件为 `docker-compose.yaml`。最新源代码另保存在 Git worktree，原目录的用户未提交文件保持不变。部署只替换 app，不重启旧 PHP/MySQL：
+服务器 `139.162.121.96`；原 Compose 目录 `/opt/backup/refactorBBS/jnsecBBS`，文件为 `docker-compose.yaml`。本轮镜像为 `bbs:06f0a89`（`bbs:latest` 指向它）；源代码快照位于 `/opt/backup/refactorBBS/releases/20261025-mirror` Git worktree，原目录的用户未提交文件保持不变。部署只替换 app，不重启旧 PHP/MySQL：
 
 ```sh
 docker-compose build app
@@ -123,7 +123,9 @@ nginx 源站配置 `/etc/nginx/sites-available/bbs.jnsec.org`，80 端口按 Coo
 
 ## 验证与后续工作
 
-已执行 Go race 测试、go vet、前端 TypeScript/Vite 构建；验证过历史内容、头像、登录、发布/编辑/回复/点赞，以及只读写接口拦截。同步已通过真实 MySQL 的新增/修改/删除、UTF-8、会话保留、故障回滚和重试测试。可重复运行：
+已执行 Go race 测试、go vet、前端 TypeScript/Vite 构建；验证过历史内容、头像、登录、发布/编辑/回复/点赞，以及只读写接口拦截。同步已通过真实 MySQL 的新增/修改/删除、UTF-8、会话保留、故障回滚和重试测试。
+
+北京时间 2026-10-25 17:20 已观察到 timer 自动成功运行，耗时约 15 秒。公网 HTTPS 验证管理员写操作同样被拒绝，登录会话跨同步保留。清理测试账号后，源库与目标库各有 12,546 条帖子，全部评论正文校验和一致；测试账号在两库均为 0，生产未发布测试内容。可重复运行：
 
 ```sh
 go test -race ./...
