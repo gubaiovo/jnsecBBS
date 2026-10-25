@@ -37,12 +37,12 @@ export default function ProfilePage() {
           </p>
           {u.bio && <p className="mt-2 text-sm">{u.bio}</p>}
         </div>
-        {session?.user && session.user.id === u.id && (
+        {!session?.readOnly && session?.user && session.user.id === u.id && (
           <Button asChild variant="outline" size="sm">
             <Link to="/settings">编辑资料与设置</Link>
           </Button>
         )}
-        {session?.user?.isAdmin && (
+        {!session?.readOnly && session?.user?.isAdmin && (
           <Button asChild variant="outline" size="sm">
             <Link to="/admin">管理后台</Link>
           </Button>

@@ -13,6 +13,7 @@ type Database struct {
 }
 
 type Config struct {
+	ReadOnly      bool   `yaml:"read_only"`
 	Listen        string `yaml:"listen"`
 	SiteName      string `yaml:"site_name"`
 	Timezone      string `yaml:"timezone"`
@@ -62,6 +63,9 @@ func Load(path string) (*Config, error) {
 
 // applyEnv 环境变量优先级最高，便于容器化部署。
 func applyEnv(cfg *Config) {
+	if v := os.Getenv("JNSEC_READ_ONLY"); v != "" {
+		cfg.ReadOnly = truthy(v)
+	}
 	if v := os.Getenv("JNSEC_LISTEN"); v != "" {
 		cfg.Listen = v
 	}

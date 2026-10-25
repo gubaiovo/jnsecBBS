@@ -15,6 +15,7 @@ func TestLoadDefaultsWhenMissing(t *testing.T) {
 }
 
 func TestEnvOverrides(t *testing.T) {
+	t.Setenv("JNSEC_READ_ONLY", "true")
 	t.Setenv("JNSEC_LISTEN", "0.0.0.0:9000")
 	t.Setenv("JNSEC_DB_DRIVER", "mysql")
 	t.Setenv("JNSEC_DB_DSN", "u:p@tcp(db:3306)/bbs?parseTime=true")
@@ -32,7 +33,7 @@ func TestEnvOverrides(t *testing.T) {
 	if cfg.Database.Driver != "mysql" || cfg.Database.DSN != "u:p@tcp(db:3306)/bbs?parseTime=true" {
 		t.Fatalf("database not overridden: %+v", cfg.Database)
 	}
-	if !cfg.CookieSecure || !cfg.TrustProxy {
+	if !cfg.CookieSecure || !cfg.TrustProxy || !cfg.ReadOnly {
 		t.Fatalf("bool env not applied: %+v", cfg)
 	}
 	if cfg.SessionSecret != "secret-from-env" {

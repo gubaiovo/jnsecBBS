@@ -1,8 +1,9 @@
 package models
 
 import (
-	"encoding/json"
 	"time"
+
+	"github.com/exzco/bbs/internal/flarum"
 
 	"github.com/exzco/bbs/internal/slug"
 )
@@ -33,7 +34,7 @@ type Discussion struct {
 	IsLocked         bool       `gorm:"column:is_locked"`
 	IsSticky         bool       `gorm:"column:is_sticky"`
 	ViewCount        int        `gorm:"column:view_count"`
-	Tags             []Tag      `gorm:"many2many:flarum_discussion_tag;foreignKey:ID;joinForeignKey:DiscussionID;joinReferences:ID"`
+	Tags             []Tag      `gorm:"many2many:flarum_discussion_tag;foreignKey:ID;joinForeignKey:DiscussionID;joinReferences:TagID"`
 }
 
 func (Discussion) TableName() string { return "flarum_discussions" }
@@ -65,7 +66,7 @@ type Post struct {
 	UserID       *uint       `gorm:"column:user_id"`
 	User         User        `gorm:"foreignKey:UserID"`
 	Type         string      `gorm:"column:type;type:varchar(100)"`  // 仅 'comment' 参与内容展示
-	Content      string      `gorm:"column:content;type:mediumtext"` // Flarum JSON：{"text": "..."}
+	Content      string      `gorm:"column:content;type:mediumtext"` // s9e XML; historical Go JSON is also readable
 	EditedAt     *time.Time  `gorm:"column:edited_at"`
 	EditedUserID *uint       `gorm:"column:edited_user_id"`
 	HiddenAt     *time.Time  `gorm:"column:hidden_at"`
@@ -79,24 +80,16 @@ type Post struct {
 
 func (Post) TableName() string { return "flarum_posts" }
 
-// Markdown 解出正文（type=comment 的 content JSON 中取 text）。
+// Markdown restores source text from legacy XML, earlier Go JSON, or plain text.
 func (p *Post) Markdown() string {
 	if p.Type != "comment" {
 		return ""
 	}
-	var m struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal([]byte(p.Content), &m); err == nil {
-		return m.Text
-	}
-	return p.Content // 兼容裸文本
+	return flarum.DecodeContent(p.Content)
 }
 
-// SetMarkdown 把 Markdown 包装为 Flarum content JSON。
 func (p *Post) SetMarkdown(md string) {
-	b, _ := json.Marshal(map[string]string{"text": md})
-	p.Content = string(b)
+	p.Content = flarum.EncodeContent(md)
 }
 
 // PostNumber 返回楼层号（0 表示无楼层，如 discussionRenamed 等系统帖）。

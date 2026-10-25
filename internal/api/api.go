@@ -3,8 +3,10 @@ package api
 import (
 	"hash/fnv"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +44,13 @@ func New(cfg *config.Config, g *gorm.DB) *Server {
 // Register 挂载全部 API 路由。
 func (s *Server) Register(r gin.IRouter) {
 	g := r.Group("/api")
+	g.Use(func(c *gin.Context) {
+		if s.cfg.ReadOnly && c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead && c.Request.Method != http.MethodOptions && c.Request.URL.Path != "/api/auth/login" && c.Request.URL.Path != "/api/auth/logout" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "迁移期间新站只读，请前往旧站进行修改。", "code": "read_only"})
+			return
+		}
+		c.Next()
+	})
 	g.GET("/me", s.me)
 	g.GET("/auth/captcha", s.captchaNew)
 	g.POST("/auth/login", s.limitWith(authLimiter), s.login)
@@ -245,9 +254,19 @@ func avatarURL(u *models.User) string {
 		name = u.Username
 	}
 	if u.AvatarURL != "" {
-		return u.AvatarURL
+		value := u.AvatarURL
+		if strings.HasPrefix(value, "/assets/") || strings.HasPrefix(value, "/avatars/") {
+			return value
+		}
+		if parsed, err := url.Parse(value); err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != "" {
+			return value
+		}
+		// Flarum persists a basename, not the public avatar URL.
+		if !strings.ContainsAny(value, "/\\:") && value != "." && value != ".." {
+			return "/assets/avatars/" + url.PathEscape(value)
+		}
 	}
-	return "/avatar/" + name + ".svg"
+	return "/avatar/" + url.PathEscape(name) + ".svg"
 }
 
 type TagDTO struct {
@@ -269,7 +288,7 @@ func (s *Server) tagDTO(t *models.Tag, u *models.User) TagDTO {
 		ID: t.ID, Name: t.Name, Slug: t.Slug, Description: t.Description,
 		Color: t.Color, Position: derefInt(t.Position), ParentID: t.ParentID,
 		DiscussionsCount: t.DiscussionsCount,
-		CanPost:          auth.CanPostTag(u, t),
+		CanPost:          !s.cfg.ReadOnly && auth.CanPostTag(u, t),
 		CanView:          auth.CanViewTag(u, t),
 	}
 }
@@ -332,8 +351,8 @@ func (s *Server) postDTO(p *models.Post, likedSet map[uint]bool, u *models.User)
 		Content: p.Markdown(), HTML: s.renderPostHTML(p),
 		LikeCount: p.LikeCount, Liked: likedSet[p.ID],
 		CreatedAt: p.CreatedAt, EditedAt: p.EditedAt, Hidden: p.HiddenAt != nil,
-		CanEdit: auth.CanEditPost(u, p),
-		CanHide: u != nil && (u.IsModerator() || (p.UserID != nil && *p.UserID == u.ID)),
+		CanEdit: !s.cfg.ReadOnly && auth.CanEditPost(u, p),
+		CanHide: !s.cfg.ReadOnly && u != nil && (u.IsModerator() || (p.UserID != nil && *p.UserID == u.ID)),
 	}
 	dto.Discussion.ID = p.DiscussionID
 	return dto
@@ -521,4 +540,33 @@ func (s *Server) limitWith(rl *rateLimiter) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// visibleDiscussions applies visibility before pagination and aggregation, so
+// multi-tag discussions cannot leak via a public tag, search, or user profile.
+func (s *Server) visibleDiscussions(u *models.User) *gorm.DB {
+	query := s.db.Model(&models.Discussion{}).Where("flarum_discussions.is_private = ?", false)
+	var tags []models.Tag
+	if err := s.db.Find(&tags).Error; err != nil {
+		return query.Where("1 = 0")
+	}
+	tp := s.fillTagPerms(tags)
+	if tp.Failed {
+		return query.Where("1 = 0")
+	}
+	denied := []uint{}
+	for i := range tags {
+		if !auth.CanViewTag(u, &tags[i]) {
+			denied = append(denied, tags[i].ID)
+		}
+	}
+	if len(denied) > 0 {
+		query = query.Where("NOT EXISTS (SELECT 1 FROM flarum_discussion_tag access_tag WHERE access_tag.discussion_id = flarum_discussions.id AND access_tag.tag_id IN ?)", denied)
+	}
+	return query
+}
+
+func (s *Server) visiblePosts(u *models.User) *gorm.DB {
+	ids := s.visibleDiscussions(u).Select("flarum_discussions.id").Where("flarum_discussions.hidden_at IS NULL AND flarum_discussions.is_approved = ?", true)
+	return s.db.Model(&models.Post{}).Where("discussion_id IN (?) AND is_private = ?", ids, false)
 }

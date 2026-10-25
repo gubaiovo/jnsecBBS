@@ -50,7 +50,7 @@ func (s *Server) home(c *gin.Context) {
 			ids = append(ids, ch.ID)
 		}
 		var d models.Discussion
-		err := s.db.Joins("JOIN flarum_discussion_tag dt ON dt.discussion_id = flarum_discussions.id").
+		err := s.visibleDiscussions(u).Joins("JOIN flarum_discussion_tag dt ON dt.discussion_id = flarum_discussions.id").
 			Where("dt.tag_id IN ? AND flarum_discussions.hidden_at IS NULL AND flarum_discussions.is_approved = 1", ids).
 			Order("flarum_discussions.last_posted_at DESC").
 			Preload("User").Preload("Tags").
@@ -126,6 +126,7 @@ func (s *Server) loadTag(c *gin.Context) (*models.Tag, []models.Tag, *models.Use
 		return nil, nil, nil, false
 	}
 	u := s.currentUser(c)
+	auth.FillTagPerm(s.db, &tag, auth.LoadTagPerms(s.db))
 	if !auth.CanViewTag(u, &tag) {
 		fail(c, http.StatusForbidden, "你没有查看该版块的权限。")
 		return nil, nil, nil, false
@@ -150,7 +151,7 @@ func (s *Server) tagDetail(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"tag":     t,
-		"canPost": auth.CanPostTag(u, tag),
+		"canPost": !s.cfg.ReadOnly && auth.CanPostTag(u, tag),
 	})
 }
 
@@ -164,7 +165,7 @@ func (s *Server) tagDiscussions(c *gin.Context) {
 		ids = append(ids, ch.ID)
 	}
 	s.fillTagCounts(append([]models.Tag{*tag}, children...))
-	base := s.db.Joins("JOIN flarum_discussion_tag dt ON dt.discussion_id = flarum_discussions.id").
+	base := s.visibleDiscussions(u).Joins("JOIN flarum_discussion_tag dt ON dt.discussion_id = flarum_discussions.id").
 		Where("dt.tag_id IN ? AND flarum_discussions.hidden_at IS NULL AND flarum_discussions.is_approved = 1", ids)
 	var total int64
 	base.Session(&gorm.Session{}).Distinct("flarum_discussions.id").Count(&total)
@@ -232,11 +233,12 @@ func (s *Server) preview(c *gin.Context) {
 // loadDiscussion 加载讨论并做可见性检查。
 func (s *Server) loadDiscussion(c *gin.Context, id uint) (*models.Discussion, *models.User, bool) {
 	var d models.Discussion
-	if err := s.db.Preload("User").Preload("Tags").First(&d, id).Error; err != nil {
+	if err := s.visibleDiscussions(s.currentUser(c)).Preload("User").Preload("Tags").First(&d, id).Error; err != nil {
 		fail(c, http.StatusNotFound, "该帖子不存在。")
 		return nil, nil, false
 	}
 	u := s.currentUser(c)
+	s.fillTagPerms(d.Tags)
 	for _, t := range d.Tags {
 		if !auth.CanViewTag(u, &t) {
 			fail(c, http.StatusForbidden, "你没有查看该帖子的权限。")
@@ -270,7 +272,7 @@ func (s *Server) discussionDetail(c *gin.Context) {
 	pages := paginate(d.CommentCount, page, perPagePosts)
 
 	var posts []models.Post
-	s.db.Where("discussion_id = ? AND type = ? AND is_approved = ?", d.ID, "comment", true).Order("number ASC").
+	s.db.Where("discussion_id = ? AND type = ? AND is_approved = ? AND is_private = ?", d.ID, "comment", true, false).Order("number ASC").
 		Limit(perPagePosts).Offset((page - 1) * perPagePosts).Preload("User").Find(&posts)
 
 	liked := s.loadLikes(posts, u)
@@ -285,9 +287,9 @@ func (s *Server) discussionDetail(c *gin.Context) {
 		dto.Discussion.Slug = d.Slug()
 		views = append(views, dto)
 	}
-	canReply := u != nil && !d.IsLocked
+	canReply := !s.cfg.ReadOnly && u != nil && !d.IsLocked
 	for _, t := range d.Tags {
-		if !auth.CanPostTag(u, &t) {
+		if !auth.CanReplyTag(u, &t) {
 			canReply = false
 		}
 	}
@@ -303,7 +305,7 @@ func (s *Server) discussionDetail(c *gin.Context) {
 		"posts":      views,
 		"page":       PageDTO{Page: page, Pages: pages, Total: d.CommentCount},
 		"canReply":   canReply,
-		"isMod":      isMod,
+		"isMod":      isMod && !s.cfg.ReadOnly,
 		"editorTags": editorTags,
 	})
 }
@@ -404,13 +406,12 @@ func (s *Server) createDiscussion(c *gin.Context) {
 }
 
 func (s *Server) reply(c *gin.Context) {
-	u := s.currentUser(c)
 	id, _ := parseUint(c.Param("id"))
-	var d models.Discussion
-	if err := s.db.Preload("Tags").First(&d, id).Error; err != nil {
-		fail(c, http.StatusNotFound, "该帖子不存在。")
+	loaded, u, ok := s.loadDiscussion(c, id)
+	if !ok {
 		return
 	}
+	d := *loaded
 	if d.IsLocked {
 		fail(c, http.StatusBadRequest, "该帖子已被锁定，无法回复。")
 		return
@@ -424,7 +425,7 @@ func (s *Server) reply(c *gin.Context) {
 		return
 	}
 	for _, t := range d.Tags {
-		if !auth.CanPostTag(u, &t) {
+		if !auth.CanReplyTag(u, &t) {
 			fail(c, http.StatusForbidden, "你没有在该版块回帖的权限。")
 			return
 		}
@@ -573,6 +574,13 @@ func (s *Server) loadPost(c *gin.Context) (*models.Post, *models.User, bool) {
 		fail(c, http.StatusUnauthorized, "请先登录。")
 		return nil, nil, false
 	}
+	if _, _, ok := s.loadDiscussion(c, p.DiscussionID); !ok {
+		return nil, nil, false
+	}
+	if p.IsPrivate || p.Type != "comment" || (!p.IsApproved && !u.IsModerator()) {
+		fail(c, http.StatusNotFound, "该帖子不存在。")
+		return nil, nil, false
+	}
 	return &p, u, true
 }
 
@@ -614,9 +622,11 @@ func (s *Server) editPost(c *gin.Context) {
 	}
 	now := time.Now()
 	edited := now
-	s.db.Model(p).Updates(map[string]any{"edited_at": edited})
 	p.SetMarkdown(body.Content)
-	s.db.Model(p).Update("content", p.Content)
+	if err := s.db.Model(p).Updates(map[string]any{"edited_at": edited, "edited_user_id": u.ID, "content": p.Content}).Error; err != nil {
+		fail(c, http.StatusInternalServerError, "保存失败，请重试。")
+		return
+	}
 	authorID := uint(0)
 	if p.UserID != nil {
 		authorID = *p.UserID
@@ -680,7 +690,7 @@ func (s *Server) profile(c *gin.Context) {
 	}
 	viewer := s.currentUser(c)
 	canSeeHidden := viewer != nil && viewer.IsModerator()
-	dQuery := s.db.Model(&models.Discussion{}).Where("flarum_discussions.user_id = ?", p.ID)
+	dQuery := s.visibleDiscussions(viewer).Where("flarum_discussions.user_id = ?", p.ID)
 	if !canSeeHidden {
 		dQuery = dQuery.Where("flarum_discussions.hidden_at IS NULL AND flarum_discussions.is_approved = 1")
 	}
@@ -691,7 +701,7 @@ func (s *Server) profile(c *gin.Context) {
 		Order("flarum_discussions.last_posted_at DESC").Limit(10).Find(&discs)
 
 	var posts []models.Post
-	s.db.Where("user_id = ? AND hidden_at IS NULL AND type = ? AND is_approved = ?", p.ID, "comment", true).
+	s.visiblePosts(viewer).Where("user_id = ? AND hidden_at IS NULL AND type = ? AND is_approved = ?", p.ID, "comment", true).
 		Preload("Discussion").Preload("User").
 		Order("created_at DESC").Limit(10).Find(&posts)
 	type postRow struct {
@@ -733,11 +743,11 @@ func (s *Server) search(c *gin.Context) {
 	if len([]rune(q)) >= 2 {
 		like := "%" + q + "%"
 		var discs []models.Discussion
-		s.db.Where("hidden_at IS NULL AND is_approved = 1 AND title LIKE ?", like).
+		s.visibleDiscussions(s.currentUser(c)).Where("hidden_at IS NULL AND is_approved = 1 AND title LIKE ?", like).
 			Preload("User").Preload("Tags").
 			Order("last_posted_at DESC").Limit(20).Find(&discs)
 		var posts []models.Post
-		s.db.Where("hidden_at IS NULL AND is_approved = 1 AND content LIKE ? AND type = ?", like, "comment").
+		s.visiblePosts(s.currentUser(c)).Where("hidden_at IS NULL AND is_approved = 1 AND content LIKE ? AND type = ?", like, "comment").
 			Preload("User").Preload("Discussion").
 			Order("created_at DESC").Limit(20).Find(&posts)
 		data["discussions"] = s.summaries(discs, s.currentUser(c))

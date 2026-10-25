@@ -3,7 +3,7 @@ listen: "0.0.0.0:8080"
 site_name: "JNSEC BBS"
 timezone: "Asia/Shanghai"
 data_dir: "./data"
-session_secret: "fd19ec25c8913465de3e6d67c911950dc50af8205823b994077da989d72dce6c"
+session_secret: "CHANGE-ME-to-a-random-64-char-string"
 cookie_secure: true
 trust_proxy: true
 # CSRF 同源校验白名单：站点所有可能的访问 Origin（新站子域名 / 主域全量切换后）
@@ -13,8 +13,11 @@ trusted_origins:
 
 database:
   driver: "mysql"
-  dsn: "root:123456@tcp(127.0.0.1:3306)/flarum?charset=utf8mb4&parseTime=true&loc=Local"
+  dsn: "bbs_go_ro:CHANGE-ME@tcp(127.0.0.1:3306)/bbs?charset=utf8mb4&parseTime=true&loc=Local"
 
 registration: "invite"
 assets_dir: "/flarum/public/assets"
 log_level: "info"
+
+# Enable during one-way old-to-new data synchronization.
+read_only: true

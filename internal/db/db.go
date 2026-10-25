@@ -16,8 +16,10 @@ func Open(driver, dsn string) (*gorm.DB, error) {
 	switch driver {
 	case "mysql":
 		dialector = mysql.Open(dsn)
-	default: // sqlite
+	case "sqlite":
 		dialector = sqlite.Open(dsn)
+	default:
+		return nil, fmt.Errorf("unsupported database driver: %s", driver)
 	}
 	return gorm.Open(dialector, &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Warn),
@@ -43,13 +45,8 @@ func Migrate(g *gorm.DB, seed bool) error {
 		}
 		return nil
 	}
-	if err := g.AutoMigrate(
-		&models.User{}, &models.Group{},
-		&models.Discussion{}, &models.Post{}, &models.PostLike{},
-		&models.Tag{}, &models.Notification{},
-		&models.AccessToken{}, &models.InviteCode{}, &models.Setting{},
-	); err != nil {
-		return fmt.Errorf("migrate: %w", err)
+	if err := migrateModels(g); err != nil {
+		return err
 	}
 	if seed {
 		return SeedDefaults(g)
@@ -129,58 +126,59 @@ func SeedDefaults(g *gorm.DB) error {
 		}
 	}
 
-	g.Where("`key` = ?", models.SettingKeySiteName).FirstOrInit(&models.Setting{Key: models.SettingKeySiteName, Value: "JNSEC BBS"})
-
 	return SeedDefaultTags(g)
 }
 
-// SeedDefaultTags 空库时按原站结构预置版块（可在管理后台修改）。
+// SeedDefaultTags gives new installations a neutral board. Existing forum
+// taxonomy and site title remain owned by the administrator.
 func SeedDefaultTags(g *gorm.DB) error {
 	var n int64
-	g.Model(&models.Tag{}).Count(&n)
+	if err := g.Model(&models.Tag{}).Count(&n).Error; err != nil {
+		return err
+	}
 	if n > 0 {
 		return nil
 	}
-	pos := func(i int) *int { return &i }
-	tags := []models.Tag{
-		{Name: "网络安全", Slug: "security", Description: "方向各异的安全技术", Color: "#1e88e5", Position: pos(1)},
-		{Name: "比赛相关", Slug: "CTF", Description: "报名通知 / WriteUp", Color: "#9e9d24", Position: pos(2)},
-		{Name: "技术专精", Slug: "tech", Description: "编程语言/机器学习/运维/框架/玄学/…", Color: "#2e7d32", Position: pos(3)},
-		{Name: "工作&读研", Slug: "career", Description: "公司高校评价/内推&社招信息/面试经验", Color: "#7b1fa2", Position: pos(4)},
-		{Name: "建设&发展", Slug: "dev", Description: "传承", Color: "#c62828", Position: pos(5)},
-		{Name: "悠哉日常", Slug: "daily", Description: "未来展望/哲学思考/新闻/团队娱乐/…", Color: "#ef6c00", Position: pos(6)},
-		{Name: "通知公告", Slug: "announcements", Description: "活动通知/事件公告/运维变动", Color: "#ff7043", Position: pos(7)},
-		{Name: "平台运维", Slug: "ops", Description: "平台运维记录", Color: "#26c6da", Position: pos(8)},
-		{Name: "周报", Slug: "weekly", Description: "勤能补拙", Color: "#5c6bc0", Position: pos(9)},
-	}
-	if err := g.Create(&tags).Error; err != nil {
+	position := 1
+	return g.Create(&models.Tag{Name: "综合讨论", Slug: "general", Color: "#1e88e5", Position: &position}).Error
+}
+
+// InitializeEmpty explicitly initializes a standalone database. Never run
+// AutoMigrate against an existing Flarum schema (including partial installs).
+func InitializeEmpty(g *gorm.DB) error {
+	tables, err := g.Migrator().GetTables()
+	if err != nil {
 		return err
 	}
-	bySlug := map[string]uint{}
-	for _, t := range tags {
-		bySlug[t.Slug] = t.ID
+	if len(tables) != 0 {
+		return fmt.Errorf("init-db requires an empty database; found %d tables", len(tables))
 	}
-	child := func(parent string, name, slugName string) models.Tag {
-		pid := bySlug[parent]
-		return models.Tag{Name: name, Slug: slugName, ParentID: &pid}
+	if err := migrateModels(g); err != nil {
+		return err
 	}
-	children := []models.Tag{
-		child("security", "Web", "web"),
-		child("security", "硬件与物联网", "hardware"),
-		child("security", "网络协议", "protocol"),
-		child("security", "逆向", "reverse"),
-		child("security", "Pwn", "pwn"),
-		child("security", "移动安全", "mobile"),
-		child("security", "密码学", "crypto"),
-		child("security", "Misc", "misc"),
-		child("security", "AWD专区", "awd"),
-		child("CTF", "报名通知", "notice"),
-		child("CTF", "WriteUp", "writeup"),
-		child("tech", "环境配置", "env"),
-		child("tech", "通用技术", "general"),
-		child("career", "公司感受", "company"),
-		child("career", "内推专栏", "referral"),
-		child("career", "读研专栏", "grad"),
+	return SeedDefaults(g)
+}
+
+func migrateModels(g *gorm.DB) error {
+	if err := g.AutoMigrate(
+		&models.User{}, &models.Group{}, &models.Discussion{}, &models.Post{},
+		&models.PostLike{}, &models.Tag{}, &models.Notification{}, &models.AccessToken{},
+		&models.InviteCode{}, &models.Setting{}, &models.GroupPermission{},
+	); err != nil {
+		return fmt.Errorf("migrate: %w", err)
 	}
-	return g.Create(&children).Error
+	return nil
+}
+
+// CheckReadOnly verifies an initialized mirror without DDL or seed writes.
+func CheckReadOnly(g *gorm.DB) error {
+	if err := ensureMySQLCompatibility(g); err != nil {
+		return err
+	}
+	for _, table := range []string{"bbs_notifications", "bbs_invite_codes"} {
+		if err := g.Exec("SELECT 1 FROM `" + table + "` LIMIT 1").Error; err != nil {
+			return fmt.Errorf("read-only database missing %s", table)
+		}
+	}
+	return nil
 }

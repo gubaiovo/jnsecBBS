@@ -29,6 +29,20 @@ func main() {
 		case "serve":
 			serveCmd(os.Args[2:])
 			return
+		case "audit-content":
+			auditContentCmd(os.Args[2:])
+			return
+		case "init-db":
+			cfg := loadCfg(os.Args[2:])
+			g, err := db.Open(cfg.Database.Driver, cfg.Database.DSN)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if err := db.InitializeEmpty(g); err != nil {
+				log.Fatal(err)
+			}
+			log.Println("数据库初始化完成。")
+			return
 		case "seed-admin":
 			seedAdminCmd(os.Args[2:])
 			return
@@ -44,6 +58,8 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `JNSEC BBS (Go)
 
 用法:
+  bbs audit-content [-c config.yaml]      只读输出正文源文本校验和
+  bbs init-db [-c config.yaml]            初始化独立空库（拒绝已有表）
   bbs serve [-c config.yaml]              启动服务
   bbs seed-admin [-c config.yaml] -username x -email x@y -password xxx
                                           创建/提升管理员
@@ -65,6 +81,12 @@ func openDB(cfg *config.Config, seed bool) *gorm.DB {
 	g, err := db.Open(cfg.Database.Driver, cfg.Database.DSN)
 	if err != nil {
 		log.Fatalf("连接数据库失败: %v", err)
+	}
+	if cfg.ReadOnly {
+		if err := db.CheckReadOnly(g); err != nil {
+			log.Fatalf("只读数据库校验失败: %v", err)
+		}
+		return g
 	}
 	if err := db.Migrate(g, seed); err != nil {
 		log.Fatalf("数据库迁移失败: %v", err)
@@ -148,6 +170,9 @@ func seedAdminCmd(args []string) {
 	password := fs.String("password", "", "密码（至少 8 位）")
 	_ = fs.Parse(args)
 	cfg := loadCfg([]string{"-c", *cfgPath})
+	if cfg.ReadOnly {
+		log.Fatal("只读模式禁止创建或修改管理员")
+	}
 	g := openDB(cfg, true)
 
 	if *username == "" || *email == "" || len(*password) < 8 {

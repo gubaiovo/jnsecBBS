@@ -59,7 +59,7 @@ services:
       JNSEC_LISTEN: 0.0.0.0:8080
       JNSEC_SITE_NAME: ${SITE_NAME}
       JNSEC_DB_DRIVER: mysql
-      JNSEC_DB_DSN: root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/flarum?charset=utf8mb4&parseTime=true&loc=Local
+      JNSEC_DB_DSN: ${APP_DB_DSN:?Set APP_DB_DSN to the application database DSN}
       JNSEC_SESSION_SECRET: ${SESSION_SECRET}
       JNSEC_COOKIE_SECURE: ${COOKIE_SECURE}
       JNSEC_TRUSTED_ORIGINS: ${TRUSTED_ORIGINS}
@@ -68,6 +68,7 @@ services:
       # 旧站头像/附件目录。保留内联默认值：缺失时 /assets 路由不注册，旧用户头像会静默丢失
       JNSEC_ASSETS_DIR: ${ASSETS_DIR:-/flarum/public/assets}
       JNSEC_REGISTRATION: ${REGISTRATION}
+      JNSEC_READ_ONLY: ${READ_ONLY:-false}
       TZ: ${TZ}
     volumes:
       - appdata:/app/data

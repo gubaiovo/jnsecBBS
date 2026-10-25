@@ -82,6 +82,7 @@ export interface NotificationItem {
 }
 
 export interface SessionInfo {
+  readOnly: boolean
   user: User | null
   csrfToken: string
   siteName: string

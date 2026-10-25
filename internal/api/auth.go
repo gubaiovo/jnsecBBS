@@ -28,6 +28,7 @@ func (s *Server) me(c *gin.Context) {
 	u := s.currentUser(c)
 	resp := gin.H{
 		"user":         userDTO(u),
+		"readOnly":     s.cfg.ReadOnly,
 		"csrfToken":    csrf.Token(c.Request),
 		"siteName":     s.settingValue(models.SettingKeySiteName),
 		"registration": s.settingValue(models.SettingKeyRegistration),
@@ -79,7 +80,9 @@ func (s *Server) startSession(c *gin.Context, u *models.User) {
 	}
 	auth.SetSessionCookie(c.Writer, token, s.cfg.CookieSecure)
 	now := time.Now()
-	s.db.Model(u).Update("last_seen_at", &now)
+	if !s.cfg.ReadOnly {
+		s.db.Model(u).Update("last_seen_at", &now)
+	}
 	var unread int64
 	s.db.Model(&models.Notification{}).Where("user_id = ? AND read_at IS NULL", u.ID).Count(&unread)
 	c.JSON(http.StatusOK, gin.H{"user": userDTO(u), "unread": unread, "csrfToken": csrf.Token(c.Request)})
@@ -243,8 +246,12 @@ func (s *Server) updatePassword(c *gin.Context) {
 func (s *Server) updateAvatar(c *gin.Context) {
 	u := s.currentUser(c)
 	if c.PostForm("action") == "remove" {
-		s.removeAvatarFile(u.AvatarURL)
-		s.db.Model(u).Update("avatar_url", "")
+		old := u.AvatarURL
+		if err := s.db.Model(u).Update("avatar_url", "").Error; err != nil {
+			fail(c, http.StatusInternalServerError, "删除头像失败。")
+			return
+		}
+		s.removeAvatarFile(old)
 		c.JSON(http.StatusOK, gin.H{"avatar": avatarURL(u)})
 		return
 	}
@@ -291,8 +298,12 @@ func (s *Server) updateAvatar(c *gin.Context) {
 	old := u.AvatarURL
 	// 写入 flarum 的 avatar_url：指向新站自己的头像路由（data/avatars 由 app 伺服）
 	url := "/avatars/" + name + ".png"
-	s.db.Model(u).Update("avatar_url", url)
-	s.removeAvatarFile(strings.TrimPrefix(old, "/avatars/"))
+	if err := s.db.Model(u).Update("avatar_url", url).Error; err != nil {
+		_ = os.Remove(dest)
+		fail(c, http.StatusInternalServerError, "保存头像失败。")
+		return
+	}
+	s.removeAvatarFile(old)
 	c.JSON(http.StatusOK, gin.H{"avatar": url})
 }
 
@@ -327,7 +338,7 @@ type NotificationDTO struct {
 func (s *Server) notifications(c *gin.Context) {
 	u := s.currentUser(c)
 	var notifs []models.Notification
-	s.db.Where("user_id = ?", u.ID).
+	s.db.Where("user_id = ? AND discussion_id IN (?)", u.ID, s.visibleDiscussions(u).Select("flarum_discussions.id").Where("hidden_at IS NULL AND is_approved = ?", true)).
 		Preload("Sender").Preload("Discussion").
 		Order("created_at DESC").Limit(50).Find(&notifs)
 	items := make([]NotificationDTO, 0, len(notifs))

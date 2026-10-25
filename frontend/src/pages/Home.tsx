@@ -30,13 +30,13 @@ export default function HomePage() {
             <Button asChild className="bg-white text-[#006064] hover:bg-white/90">
               <Link to="/login">登录</Link>
             </Button>
-            <Button
+            {!session?.readOnly && <Button
               asChild
               variant="outline"
               className="border-white/70 bg-transparent text-white hover:bg-white/15 hover:text-white"
             >
               <Link to="/register">注册</Link>
-            </Button>
+            </Button>}
           </div>
         </div>
       )}

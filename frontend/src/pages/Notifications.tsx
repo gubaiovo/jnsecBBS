@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router"
 import { AtSign, Heart, Reply } from "lucide-react"
 import { toast } from "sonner"
+import { useSession } from "@/lib/session"
 import { api, discussionUrl } from "@/lib/api"
 import type { NotificationItem } from "@/lib/types"
 import { UserAvatar } from "@/components/DiscussionParts"
@@ -11,6 +12,7 @@ import { timeAgo } from "@/lib/format"
 const icons = { reply: Reply, mention: AtSign, like: Heart }
 
 export default function NotificationsPage() {
+  const { data: session } = useSession()
   const qc = useQueryClient()
   const { data } = useQuery({
     queryKey: ["notifications"],
@@ -31,7 +33,7 @@ export default function NotificationsPage() {
     <div>
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-xl font-bold">通知</h1>
-        <Button variant="outline" size="sm" onClick={() => readAll.mutate()} disabled={readAll.isPending}>
+        <Button variant="outline" size="sm" onClick={() => readAll.mutate()} disabled={readAll.isPending || session?.readOnly}>
           全部标记已读
         </Button>
       </div>

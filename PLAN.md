@@ -1,77 +1,78 @@
-# JNSEC BBS — Go 重写计划
+# JNSEC BBS 重构计划与实际进度
 
-原站基于 Flarum（PHP + Mithril SPA），存在性能（PHP-FPM 每请求全量引导）、可维护性（框架 + 多扩展耦合）与安全性（PHP 攻击面、XSS 面）等问题。本项目使用 Go 从零重写后端，前端采用 Bun + React（shadcn/ui 组件库 + lucide-react 图标）构建现代 SPA，并保证**数据可迁移、旧链接可访问**。
+更新：2026-10-25。以已实现和验证的行为为准；部署操作见 README。
 
-## 一、总体架构决策
+## 当前架构与迁移决策
 
-| 维度 | Flarum（旧） | 新版 |
-|---|---|---|
-| 后端 | PHP 8 + Composer 多包 | Go 1.25，单静态二进制（Gin + GORM） |
-| 前端 | Mithril SPA（Node 构建） | **Bun + Vite + React 19 + TypeScript**，shadcn/ui 组件库（Radix + Tailwind CSS v4），lucide-react 图标；SPA 产物 go:embed 进二进制 |
-| API | JSON:API（内部） | REST JSON（/api/*），会话 Cookie + X-CSRF-Token 头 |
-| 数据库 | MySQL | MySQL（生产）/ SQLite（本地开发），GORM |
-| 构建 | Composer + Node | `bun run build`（前端）→ `go build`（后端），两步出单文件 |
-| 密码 | bcrypt（PHP `password_hash`） | bcrypt（`$2y$` 前缀自动兼容，老用户密码直接沿用） |
-| 会话 | access_tokens 表 | 同为服务端随机 token 表，HttpOnly Cookie |
-| 富文本 | Markdown（前端渲染） | goldmark 渲染 + bluemonday 白名单消毒后入库，前端直接展示消毒 HTML（编辑器预览走同一条管线） |
+- Go（Gin/GORM）后端 + React SPA；构建产物内嵌于二进制。首页不是服务端直出 HTML，仍由 SPA 请求 API。
+- 当前复用 MySQL 5.7 实例，但旧 PHP 使用 `flarum`，新 Go 使用独立 `bbs` 库。
+- 用户已明确：迁移期间新站只读，以旧站为准，每五分钟单向同步。不得把同步当作双写或双向合并。
+- 全量一致性快照 + 目标单事务替换；约 15 万行规模已实测。保存所有持久化表数据；新站登录会话独立。
+- 保留 Flarum 表结构与稳定 ID、密码哈希、旧链接、XML 原文和资源文件；无需为了 Go 重写而强制变更所有表。
+- Markdown 在读取时还原并渲染/消毒，不把 HTML 存入旧正文列。正文不是 Flarum JSON，而是 s9e XML；兼容此前 Go 的 JSON 写入。
 
-## 二、功能范围
+## 已完成并验证
 
-### 第一阶段（已交付，Flarum 核心对等 + 现代 SPA 前端）
-- **版块（Tags）**：两级版块（大版块/子版块）、颜色、描述、排序、URL 与 Flarum 一致 `/t/{slug}`；按版块设置"谁可看 / 谁可发帖"（内部版块权限）。
-- **帖子（Discussions）**：标题 + Markdown 正文、回复、分页、置顶、锁定、隐藏（软删除）、编辑（显示已编辑）。
-- **用户（Users）**：注册（可配置开放 / 邀请码制）、登录/登出、头像上传（自动缩放，缺省生成字环头像）、签名档（bio）、修改密码/邮箱、个人主页 `/u/{username}`、用户组（沿用 Flarum 组 ID：1=admin 2=guest 3=member 4=moderator）。
-- **通知（Notifications）**：回复、@提及、点赞，铃铛未读数（轮询）+ 通知页。
-- **点赞**：帖子点赞（对应 fof/likes 扩展）。
-- **搜索**：标题 + 正文检索（LIKE；MySQL 生产可平滑升级 ngram 全文索引）。
-- **管理后台 `/admin`**：版块管理（增删改/排序/颜色/权限）、用户管理（禁言/封禁/改组）、邀请码、站点设置。
-- **Flarum 数据导入**：`bbs import-flarum` 从原 Flarum 库导入 users/groups/discussions/posts/tags/点赞等，密码哈希原样保留；帖子 `content` JSON 自动解码为 Markdown。
-- **链接兼容**：`/d/{id}`、`/d/{id}-{slug}`、`/t/{slug}` 与 Flarum 完全一致，SPA 路由直接接管，SEO 收录与旧书签不断链。
+### 数据与框架基础
 
-### 第二阶段（后续迭代）
-- 未读标记（discussion_user 已读位点，"2 天前"新帖高亮）
-- 邮件通知/找回密码（SMTP）
-- 附件上传（对应 fof/upload）、代码高亮（chroma）
-- MySQL ngram 全文检索、评论历史版本
-- 只读 REST API（为未来小程序/客户端预留）
+- [x] 独立空 MySQL / SQLite 初始化；拒绝覆盖已有表。
+- [x] 分离 Flarum 正文兼容模块；XML / 旧 Go JSON / 裸文本读取。
+- [x] 9,288 条历史评论与原 PHP Unparser 源文本校验和一致。
+- [x] 用户组、标签关联列与旧 schema 对齐；SQLite 权限表初始化。
+- [x] 去除新安装时硬编码的俱乐部版块，保留现有站点数据。
+- [x] 旧最佳答案扩展补齐默认值的独立 SQL 脚本，不改已有记录。
+- [x] 头像路径解析、上传替换/删除、真实 404；Markdown 标题样式。
 
-### 明确不做
-- Mithril SPA 前端兼容层（服务端渲染替代）
-- Flarum 扩展运行时（所需能力直接内置）
+### 迁移同步
 
-## 三、安全设计
-1. **XSS**：Markdown → goldmark 渲染 → bluemonday `UGCPolicy` 白名单消毒后才入库/输出；模板自动转义兜底。
-2. **CSRF**：gorilla/csrf 全站中间件，所有 POST 表单带 token。
-3. **会话**：服务端 token（128bit 随机），HttpOnly + SameSite=Lax（可配 Secure），无前端可读凭据。
-4. **密码**：bcrypt cost 12；登录限速（按 IP 令牌桶）。
-5. **注入**：GORM 参数化查询，杜绝拼接 SQL。
-6. **上传**：头像仅 jpg/png，限 2MB，重采样为 128×128，随机文件名，独立数据目录不执行。
-7. **权限**：服务端逐请求鉴权（版块可见性、发帖/回帖、管理操作），前端仅展示不授权。
-8. **限速**：登录/注册/发帖按 IP + 用户双维度限速。
+- [x] `scripts/sync-flarum.py`：同一 MySQL 实例内 `flarum` → `bbs`。
+- [x] 34 张持久化数据表完整快照；`flarum_access_tokens` 仅初始化表结构，保留新站会话。
+- [x] 一致性源快照、原子目标事务、失败回滚、单任务文件锁、结构变化拒绝执行。
+- [x] 源端新增/修改/删除、UTF-8、会话保留、导入失败与重试的真实 MySQL 验证。
+- [x] systemd service + 五分钟 timer；成功时间与逐表行数写入目标控制表。已观察北京时间 17:20 自动成功执行，耗时约 15 秒。
+- [x] 后端只读模式、前端只读提示与写入口限制；登录/退出保留。
+- [x] 新站数据库账号只读，仅登录会话表允许写入。
 
-## 四、目录结构
-```
-cmd/bbs/              入口：serve / import-flarum / seed-admin
-frontend/             Bun + Vite + React + shadcn/ui SPA 源码
-internal/api/         REST JSON 接口（SPA 数据源）
-internal/frontend/    go:embed 内嵌 SPA 构建产物
-internal/config/      配置（YAML）
-internal/models/      GORM 模型（User/Discussion/Post/Tag/Group/Notification/...）
-internal/db/          连接、自动迁移、默认数据
-internal/auth/        密码、会话、权限
-internal/markdown/    goldmark + bluemonday + @提及
-internal/slug/        URL slug
-internal/web/         会话中间件、静态端点（头像/验证码）、SPA 伺服
-internal/importer/    Flarum 数据导入
-```
+### 已有业务能力与本轮修复
 
-## 五、迁移与上线步骤
-1. 部署新服务（配置 MySQL 指向**新库**），`bbs seed-admin` 创建管理员。
-2. 维护窗口内执行 `bbs import-flarum --dsn "user:pass@tcp(旧库)/flarum"`，校验讨论/帖子/用户计数。
-3. nginx 将 `bbs.jnsec.org` 反代切换到新服务；旧 `/t`、`/d` 路由天然兼容。
-4. 观察期保留旧 PHP 目录随时回切（数据不互相写入即无漂移）。
+- [x] 版块、帖子/回复、用户资料、通知、点赞、搜索、管理 API 基本功能存在。
+- [x] 历史账号 bcrypt（含 `$2y$`）兼容；服务端随机会话 Cookie。
+- [x] CSRF、Markdown 输出消毒、参数化数据库查询、登录/发帖限速。
+- [x] 详情、搜索、个人页、通知、多标签列表的版块可见性过滤。
+- [x] 父版块权限继承；发帖和回复授权区分；权限加载失败时拒绝。
+- [x] 生产随机 CSRF 密钥与仅回环绑定 Go 端口。
+- [x] Go race / vet、前端 TypeScript/Vite 构建和实机 API 验证。
 
-## 六、性能目标
-- 首页/版块页：服务端直出 HTML，无 SPA 二次 API 往返；分类卡片最后活跃帖用单查询聚合。
-- 单二进制 + 嵌入资源，冷启动 < 100ms；MySQL 连接池复用。
-- 列表页全部走索引（时间线 last_posted_at、版块计数冗余列），渲染结果可用内存缓存进一步加速（预留）。
+以上不等同于全部 Flarum 扩展功能对等或完整安全审计。
+
+## 下一阶段：完成迁移验收
+
+1. 持续观察 timer 成功时间、耗时与失败日志；确认每日实际数据变化可同步，源/目标资源引用可访问。
+2. 核对全局权限、第三方私密讨论和审核扩展。当前私密扩展内容默认不开放，不能因能同步数据就放宽授权。
+3. 对照旧站逐项验收用户组、版块、旧链接、附件、历史事件、通知与已删除内容的展示需求。
+4. 旧 `flarum_notifications`、事件帖和插件记录已保存；决定需要哪些 Go 展示/转换器，并编写对应数据样本测试。
+5. 评估同步负载。当前全量同步足够；只有数据规模或周期实测不满足时再考虑增量/binlog，避免提前设计复杂双写系统。
+
+## 后续业务与框架工作
+
+- [ ] 旧通知/事件的 Go 展示与迁移语义。
+- [ ] 全局权限及第三方权限扩展的完整映射。
+- [ ] s9e 富文本写入对等：当前 Go 可写模式使用 `<t>` 封装 Markdown，PHP 暂按文本展示；只读迁移期间不写正文。
+- [ ] Go 新头像与旧 PHP 资源存储完全互通；当前旧资源共享只读挂载，新 Go 头像仍在 appdata。
+- [ ] 未读位点、邮件找回密码、附件上传、代码高亮、真正的编辑历史。
+- [ ] 搜索语义与索引优化。当前 LIKE 检索，不声称已实现全文搜索。
+- [ ] 会话过期/吊销策略、全局 CSRF 信任来源配置等安全专项核对。
+- [ ] 标准化生产构建依赖锁定；Docker 构建已恢复 TypeScript 错误即失败。
+
+不计划运行任意 PHP/Mithril 插件；按实际需要在 Go 中实现能力。没有依据实测就承诺冷启动或查询耗时目标。
+
+## 最终切换流程（尚未执行）
+
+1. 明确旧站最终停止写入的维护窗口；备份数据库和资源。
+2. 禁用五分钟 timer，等待同步 service 完成。
+3. 暂停旧站写入，手动执行最后一次快照同步。
+4. 对照计数、正文校验和、权限、资源以及业务用例验收，保留可恢复备份。
+5. 为新站账号授予所需写权限，关闭只读模式，切换 nginx 默认入口到 Go。
+6. 旧站保持只读或封存；不再恢复旧库 → 新库的覆盖同步。
+
+切换后回旧站涉及新站新写入数据，必须先设计反向迁移；不能仅切 Cookie 或还原镜像而忽略数据差异。

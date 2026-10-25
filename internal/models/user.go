@@ -30,7 +30,7 @@ type User struct {
 	ReadFlagsAt         *time.Time `gorm:"column:read_flags_at"`
 	SuspendUntil        *time.Time `gorm:"column:suspended_until"`               // 注意：flarum/suspend 的真实列名
 	InviteCode          string     `gorm:"column:invite_code;type:varchar(128)"` // fof/doorman 遗留
-	Groups              []Group    `gorm:"many2many:flarum_group_user;foreignKey:ID;joinForeignKey:UserID;joinReferences:ID"`
+	Groups              []Group    `gorm:"many2many:flarum_group_user;foreignKey:ID;joinForeignKey:UserID;joinReferences:GroupID"`
 }
 
 func (User) TableName() string { return "flarum_users" }

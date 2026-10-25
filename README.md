@@ -1,215 +1,138 @@
-# JNSEC BBS (Go + React)
+# JNSEC BBS（Go + React）
 
-[![CI](https://github.com/exzco/BBS/actions/workflows/ci.yml/badge.svg)](https://github.com/exzco/BBS/actions/workflows/ci.yml)
+Go 论坛服务、React 前端与 Flarum 数据兼容层。前端产物内嵌于单个 Go 二进制，保留 `/d/{id}`、`/t/{slug}` 等旧链接与 bcrypt 密码。未登录只显示欢迎页。
 
-原 Flarum（PHP）论坛的重写版：Go 后端（REST API + 单静态二进制）+ Bun/React 前端（Vite + shadcn/ui + Tailwind CSS v4 + lucide-react 图标）。SPA 产物由 Go 二进制直接内嵌伺服，保证旧链接（`/t/{slug}`、`/d/{id}`）与用户密码（bcrypt，含 PHP `$2y$` 前缀）兼容，可直接从 Flarum 数据库原地导入。
+## 当前线上状态（2026-10-25）
 
-内部论坛语义：未登录仅见欢迎页，版块与帖子内容需登录后访问（前端路由守卫 + 后端接口 401 双层控制）。
+迁移期间**旧站可写、新站只读**，以旧站为唯一数据来源：
 
-架构与阶段规划见 [PLAN.md](PLAN.md)。
-
-## 功能
-
-- 版块（两级 Tag，颜色/描述/排序/按组授权可见与发帖），URL 与 Flarum 一致
-- 帖子/回复（Markdown 编辑器带预览，置顶/锁定/隐藏，编辑记录，分页）
-- 用户（邀请码或验证码注册、头像上传、签名档、用户组：管理员/版主/成员/游客）
-- 通知（回复、@提及、点赞），铃铛未读数实时轮询
-- 帖子点赞、全文搜索（关键词高亮）
-- 管理后台：版块/用户/邀请码/已删除帖/站点设置（含未登录欢迎语）
-- 深色/浅色主题切换（跟随系统）
-- 安全：CSRF（SPA 走 X-CSRF-Token 头）、XSS 白名单消毒（goldmark + bluemonday）、bcrypt、按 IP 限速、HttpOnly 会话
-
-## 快速开始（本地开发）
-
-前端（Bun 1.1+）：
-
-```bash
-cd frontend
-bun install
-bun run build     # 产物输出到 internal/frontend/dist，随后被 go:embed 打进二进制
-```
-
-后端：
-
-```bash
-go build -o bbs.exe ./cmd/bbs
-bbs.exe serve                # 默认 0.0.0.0:8080，SQLite ./bbs.db
-bbs.exe seed-admin -username admin -email admin@example.com -password admin12345
-```
-
-打开 http://127.0.0.1:8080 。默认注册方式为邀请码：先登录管理员，到 `/admin` → 邀请码 生成。
-
-前端开发模式（热更新；API 代理到本机 8080 的 Go 服务，见 `vite.config.ts`）：
-
-```bash
-cd frontend && bun dev
-```
-
-## 配置
-
-复制 `config.example.yaml` 为 `config.yaml`。要点：
-
-| 项 | 说明 |
+| 服务 | 数据与入口 |
 |---|---|
-| `database.driver` | `sqlite`（默认，本地开发）或 `mysql`（生产） |
-| `database.dsn` | MySQL 示例：`user:pass@tcp(127.0.0.1:3306)/bbs?charset=utf8mb4&parseTime=true&loc=Local` |
-| `session_secret` | 生产必须改为随机 64 位字符串 |
-| `cookie_secure` | HTTPS 反代下设 `true` |
-| `registration` | `invite`（邀请码）或 `open`（验证码开放注册） |
-| `assets_dir` | 旧 Flarum 静态资源目录，设置后 `/assets/*`（头像/附件）继续可访问 |
+| 旧 PHP Flarum | MySQL `flarum` 库，`bbs-php` 容器，源站 8081 |
+| 新 Go 论坛 | 独立 MySQL `bbs` 库，`bbs-app` 容器，仅绑定 `127.0.0.1:8080` |
+| 数据库 | 复用 `bbs-mysql` / MySQL 5.7 实例，两个独立数据库；没有新增 MySQL 容器 |
+| 网关 | Cloudflare HTTPS → 宿主机 nginx → PHP / Go |
+| 同步 | `jnsec-bbs-sync.timer` 每五分钟将旧库一致性快照同步到新库 |
 
-所有配置项均可用 `JNSEC_*` 环境变量覆盖（`JNSEC_DB_DSN`、`JNSEC_SESSION_SECRET`、`JNSEC_ASSETS_DIR` 等），容器部署无需挂载配置文件。
+公网 [切换到新站](https://bbs.jnsec.org/switch-to-new) / [切回旧站](https://bbs.jnsec.org/switch-to-old)。nginx 通过 `site_version` Cookie 灰度路由，默认仍是旧站；两站登录独立。新站页面显示只读提示，并链接到旧站进行发布和修改。
 
-## 生产部署（Docker Compose + 三容器灰度）
+新站允许登录、浏览和退出；禁止注册、发布、回复、编辑、点赞、修改账号/头像、标记通知和后台修改。前端隐藏或禁用写入入口，后端统一返回 `403` / `code=read_only`。新站数据库账号 `bbs_go_ro` 仅有 `bbs.*` SELECT，以及 `flarum_access_tokens` 的 INSERT/UPDATE/DELETE；应用启动不执行 DDL 或默认数据写入。
 
-VPS 上只需 Docker（无需装 Go/Bun）：`git clone` / `git pull` 拉到代码后，`docker compose build` 会在容器内完成前端与后端构建（多阶段 Dockerfile）。
+## 已完成的重构
 
-两种取镜像的方式任选：
-- **源码构建**（git 部署路径）：`docker compose build`；
-- **Release 镜像包**：`wget` + `docker load`（见下）。
+- `internal/flarum` 还原 s9e XML 原文，兼容旧 Go JSON；goldmark 渲染 Markdown 后经 bluemonday 消毒，不把消毒 HTML 回写旧数据。历史 9,288 条评论的源文本 SHA-256 与旧 PHP Unparser 逐条一致。
+- 修复 Flarum 头像文件名到 `/assets/avatars/` 的映射、头像替换/删除顺序，以及不存在的头像/资源/API 被返回 HTML 200 的问题。
+- 修正用户组/版块关联字段；补齐本地权限表。详情、搜索、个人页、通知、多版块列表统一过滤权限，继承父版块限制，区分发帖与回复授权，权限读取失败时拒绝访问。
+- `init-db` 支持独立空 MySQL/SQLite 初始化，拒绝已有表的数据库；新安装不植入俱乐部专用版块。
+- `audit-content` 只读输出评论 ID 与还原正文的 SHA-256，用于迁移核对。
+- 旧库最佳答案扩展缺省值修复位于 `deploy/migrations/20261025-best-answer-default.sql`，仅补充默认值 0，不修改历史记录。
+- 生产 CSRF 密钥已轮换；配置模板不再带真实密钥。页面沿用现有布局，补全 Markdown 标题样式与只读提示。
 
-`compose.yaml` 为**三容器同一网络**：`mysql`（官方 MySQL 5.7，挂现有数据卷 `bbsmysql`——旧 `flarum` 库原样保留 + 新 `bbs` 库）、`app`（新站，`bbs` 库）、`php`（旧站 Flarum，`flarum` 库，灰度期并行，全量切换后移除）。PHP 与 Go 两个后端**共享同一个 MySQL 实例**，服务名即旧 Flarum `config.php` 的 host（`mysql`），旧站零配置改动。
+## 五分钟同步脚本
 
-镜像不发布到任何 Registry，部署 = 从 GitHub Release 下载镜像包，`docker load` 导入本地：
+脚本：[`scripts/sync-flarum.py`](scripts/sync-flarum.py)。仅依赖宿主机 Python 3、Docker CLI，以及现有 MySQL 容器内的 `mysql` / `mysqldump`。密码从容器已有 `MYSQL_ROOT_PASSWORD` 环境读取，不写入脚本或命令参数。源库只执行查询/快照，写入目标必须是不同数据库；拒绝系统库和非法标识符。
 
-```bash
-# 1. 下载 Release 附件中的镜像包并导入（导入后本地得到 bbs:latest）
-wget https://github.com/exzco/BBS/releases/download/v0.1.0/bbs-image-v0.1.0.tar.gz
-docker load -i bbs-image-v0.1.0.tar.gz
+行为：
 
-# 2. 配置：.env.example 已按生产环境预填（数据库密码、会话密钥、资产路径），
-#    复制为 .env 即可（若现有数据卷的 root 密码不同，仅需修改 MYSQL_ROOT_PASSWORD）
-cp .env.example .env
+1. 检查源/目标表集合、列和索引结构，所有表必须为 InnoDB；结构变化时停止并保留上次成功数据，不能静默遗漏新扩展表。
+2. 使用 `mysqldump --single-transaction` 获取一致性快照；快照临时文件权限受限，结束后删除。
+3. 目标端在单个事务内 DELETE + INSERT；初始化不复制源触发器，避免重复执行业务逻辑。不使用 TRUNCATE、LOCK TABLES 或 `--force`。失败自动回滚，读取方看到提交前或提交后的完整版本。
+4. 以旧库为准同步新增、修改和删除。**会覆盖新库论坛数据，必须保持只读模式。**
+5. 保留目标 `flarum_access_tokens`，新站会话不会每五分钟消失。该表只复制结构，不复制旧站会话；拆库后的首次访问需要重新登录。
+6. 其他 34 张表全部复制，包括帖子、用户、关系表、旧通知、扩展记录和已有 Go 辅助数据。保存到新库不等于新 UI 已支持每一种扩展。
+7. 使用文件锁避免同一计划任务重入，在 `_bbs_sync_state` 保存最后成功时间和逐表行数；日志只记录计数与耗时，不输出帖子正文或密码。
 
-# 3. 启动（灰度期 mysql + php + app 三容器；全量切换后移除 php 即双容器）
-docker compose up -d
-docker compose exec app /app/bbs seed-admin -username admin -email admin@example.com -password admin12345
+这是**全量快照刷新**，不是双向复制或增量 CDC。本次实测约 15 万行、35 MB 数据，约 15 秒完成，适合当前五分钟周期。没有把新站改动同步回旧站的逻辑。
+
+初次使用（目标必须为空；先备份）：
+
+```sh
+sudo python3 scripts/sync-flarum.py --source flarum --target bbs \
+  --read-only-target --initialize
 ```
 
-说明：
-- `app` 服务使用本地镜像 `bbs:latest`（即上一步 docker load 导入的镜像），不引用任何镜像仓库；`build: .` 仅供有源码的环境自行构建。
-- `.env` 含真实密码与密钥，已被 `.gitignore` 排除，不会上传 GitHub。
-- `mysql` 服务挂载外部数据卷 `bbsmysql`（复用现有 MySQL 数据）；`wwwdata` 卷同时挂给 `app`（只读，旧头像与附件经 `/assets/*` 继续）与 `php`（旧站站点目录）。
-- `php` 使用的 `jnsecbbs:php8.3.36` 镜像只存在于服务器本地，无法从仓库拉取。
+后续手动同步：
 
-## 从 Flarum 到 Go：零迁移并行运行（路线 3）
-
-**Go 后端直接读写 Flarum 原表**（`flarum_users`、`flarum_discussions`、`flarum_posts`、`flarum_tags`、`flarum_groups`、`flarum_group_permission`、`flarum_post_likes`、`flarum_access_tokens`、`flarum_settings`），PHP 与 Go 两个后端操作**同一套表**——数据实时一致，**没有导入步骤、没有停机窗口、没有数据分裂**。
-
-要点：
-
-- **密码互认**：同一列的 bcrypt 哈希（含 PHP `$2y$`），旧账号密码直接登录新站。
-- **封禁互认**：flarum/suspend 的 `suspend_until` 即封禁语义，两端互通。
-- **版块权限互认**：版块可见/发帖授权读写 `flarum_group_permission`（`tag{id}.viewDiscussions` 等），管理后台的修改对 PHP 端同样生效。
-- **会话**：token 存储共享 `flarum_access_tokens`；但浏览器登录态是各自 session（PHP session cookie vs Go cookie），灰度期间用户需在两站分别登录。
-- **通知**：Go 端通知存于自建表 `bbs_notifications`（不写 Flarum 的 PHP 序列化格式），从启用日起累计。
-- **Go 专属辅助表**（自动创建，Flarum 不感知）：`bbs_notifications`、`bbs_invite_codes`。
-- **正文的消毒 HTML 不落库**：Go 每次读取时实时渲染（带内存缓存），对表结构零侵入。
-
-> 本地开发同理：`bbs.exe serve` 用 SQLite 时首次启动会按 Flarum 结构自动建表并预置默认版块。
-
-### 步骤一：准备
-
-```bash
-# 1.1 兜底备份（量级很小）
-docker exec bbs104-mysql-fix-php2shell sh -c \
-  'mysqldump -uroot -p"密码" --single-transaction flarum | gzip' > flarum-backup-$(date +%F).sql.gz
-
-# 1.2 确认旧 Flarum 的数据库 host（决定新编排是否零修改兼容）
-docker exec bbs104-php-fix-php2shell grep -n "host" /var/www/bbs/config.php
-# 输出 'host' => 'mysql'（官方容器部署惯例）即与 compose.yaml 服务名一致 ✓
-
-# 1.3 确认旧 Flarum 版本 ≥ 1.0（composer.json require.flarum/core ^1.0）
+```sh
+sudo python3 scripts/sync-flarum.py --source flarum --target bbs --read-only-target
 ```
 
-### 步骤二：切换到三容器编排（旧站对外无感）
+线上安装位置：`/opt/bbs-sync/sync-flarum.py`；配置 `/etc/jnsec-bbs-sync.conf`（仅容器和数据库名），状态目录 `/var/lib/jnsec-bbs-sync`。systemd 单元在 `deploy/systemd/`：
 
-```bash
-mkdir -p /opt/bbs && cd /opt/bbs
-# 放入 compose.yaml 与 .env（.env.example 已按生产环境预填；
-# 若现有数据卷的 root 密码不是 123456，修改 MYSQL_ROOT_PASSWORD 即可）
-# 镜像导入见上文「生产部署」第 1 步
-
-# 停止旧 compose 的容器（数据卷由新编排接管）
-docker stop bbs104-php-fix-php2shell bbs104-mysql-fix-php2shell
-
-# 启动 mysql + php（旧站照常对外，数据库换由新容器提供）
-docker compose up -d mysql php
-```
-server {
-    listen 80;
-    server_name bbs.jnsec.org;
-    client_max_body_size 20m;
-
-    # 默认指向旧站（PHP）
-    set $bbs_backend "http://127.0.0.1:8081";
-
-    # ⬇️ 核心开关 1：访问这个路径，切换到新站(Go)
-    location = /switch-to-new {
-        add_header Set-Cookie "site_version=go; Path=/; Max-Age=31536000; SameSite=Lax";
-        return 302 /;
-    }
-
-    # ⬇️ 核心开关 2：访问这个路径，切回旧站(PHP)
-    location = /switch-to-old {
-        add_header Set-Cookie "site_version=old; Path=/; Max-Age=31536000; SameSite=Lax";
-        return 302 /;
-    }
-
-    # 正常业务请求
-    location / {
-        # 如果 Cookie 里带有 site_version=go，则把后端地址修改为新站
-        if ($cookie_site_version = "go") {
-            set $bbs_backend "http://127.0.0.1:8080";
-        }
-
-        # 使用上面动态修改后的变量进行代理
-        proxy_pass $bbs_backend;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
+```sh
+sudo systemctl status jnsec-bbs-sync.timer
+sudo systemctl list-timers jnsec-bbs-sync.timer
+sudo journalctl -u jnsec-bbs-sync.service -n 20 --no-pager
+sudo systemctl start jnsec-bbs-sync.service   # 立即执行一次
+sudo systemctl stop jnsec-bbs-sync.timer    # 暂停后续执行
 ```
 
-宿主机 nginx 接管 80 端口，写入 `/etc/nginx/sites-available/bbs.jnsec.org`。
+迁移结束后，先停止并禁用 timer，等待运行中的 service 完成，再做最终核对。若决定开放新站写入，还需给应用账号授予必要写权限并设 `READ_ONLY=false`；**绝不能在同步仍启用时开放新站写入**。
 
-### 收尾
+## 开发与独立安装
 
-- 确认稳定后：`flarum` 库改名保留为历史存档，或维持现状（Go 端持续使用）。
-- Go 端表结构迁移自动执行（幂等），升级只需替换镜像后 `docker compose up -d`。
-
-## CI/CD（GitHub Actions）
-## CI/CD（GitHub Actions）
-
-- **CI**（`.github/workflows/ci.yml`，push/PR 触发）：Go `gofmt` 检查、`go vet`、`go test -race`；前端 `bun install --frozen-lockfile` + `bun run build`（tsc 类型检查）。
-- **CD**（`.github/workflows/release.yml`，推送 `v*` 标签或手动触发）：
-  1. 用仓库内 Dockerfile 多阶段构建镜像（bun 构建前端 → Go 编译）；
-  2. 交叉编译 linux / macOS / Windows 二进制；
-  3. 创建 **GitHub Release**，附件包含：镜像 tar 包（`docker save` 导出，服务器 `docker load` 导入）、三平台二进制压缩包（内含 compose、.env 示例）。
-
-## 目录结构
-
-```
-cmd/bbs/              入口：serve / seed-admin / import-flarum
-frontend/             Bun + Vite + React + shadcn/ui SPA 源码
-internal/frontend/    go:embed 内嵌的 SPA 构建产物（bun run build 输出）
-internal/config/      配置
-internal/models/      GORM 模型
-internal/db/          连接、迁移、默认版块
-internal/auth/        密码（$2y$ 兼容）、会话、权限
-internal/markdown/    goldmark + bluemonday 渲染与 @提及
-internal/slug/        URL slug
-internal/api/         REST JSON 接口（SPA 数据源）
-internal/web/         会话中间件、静态端点（头像/验证码）、SPA 伺服
-internal/importer/    Flarum 导入器
-deploy/               nginx 配置示例
-.github/workflows/    CI 与 Release 工作流
+```sh
+cd frontend
+bun install --frozen-lockfile
+bun run build
+cd ..
+go build -o bbs ./cmd/bbs
+export JNSEC_SESSION_SECRET="$(openssl rand -hex 32)"
+./bbs serve
 ```
 
-## 开发
+默认 SQLite `./bbs.db`，首次启动建表；默认非只读。使用配置示例时请按场景设置 `read_only`，它是生产迁移模板。独立 MySQL 安装：创建空库并配置 DSN，以非只读模式执行 `./bbs init-db`，然后创建管理员和启动服务：
 
-```bash
-go build ./... && go vet ./... && go test ./...
+```sh
+./bbs seed-admin -username admin -email admin@example.com -password '自行设置强密码'
 ```
+
+`seed-admin` 在只读模式下拒绝执行。不要对已导入的 Flarum 数据库运行 `init-db`。
+
+## 配置与部署
+
+`config.yaml` 可由 `JNSEC_*` 环境变量覆盖；生产 Compose 使用 `.env`。不要用示例文件覆盖已有 `.env`。
+
+| 配置 | 用途 |
+|---|---|
+| `APP_DB_DSN`（Compose）/ `JNSEC_DB_DSN` | Go 数据库 DSN，线上指向 `bbs`；旧 PHP 仍指向 `flarum` |
+| `READ_ONLY`（Compose）/ `JNSEC_READ_ONLY` | 迁移只读模式，线上 true |
+| `JNSEC_SESSION_SECRET` | 独立随机 CSRF 密钥 |
+| `JNSEC_COOKIE_SECURE` | 线上 true，Cloudflare 提供公网 HTTPS |
+| `JNSEC_SITE_NAME` | 无数据库站点名称时的默认值 |
+| `JNSEC_DATA_DIR` | Go 上传数据，线上 `/app/data` |
+| `JNSEC_ASSETS_DIR` | 旧资源路径，线上 `/flarum/public/assets` |
+| `JNSEC_REGISTRATION` | 非只读时的 invite/open 注册策略 |
+
+服务器 `139.162.121.96`；原 Compose 目录 `/opt/backup/refactorBBS/jnsecBBS`，文件为 `docker-compose.yaml`。本轮镜像为 `bbs:06f0a89`（`bbs:latest` 指向它）；源代码快照位于 `/opt/backup/refactorBBS/releases/20261025-mirror` Git worktree，原目录的用户未提交文件保持不变。部署只替换 app，不重启旧 PHP/MySQL：
+
+```sh
+docker-compose build app
+docker-compose up -d --no-deps app
+```
+
+`wwwdata` 给 PHP 挂到 `/var/www/bbs`，给 Go 只读挂到 `/flarum`；两站共享旧头像和附件文件，无需每五分钟重复复制资源文件。`appdata` 保留 Go 原上传文件。MySQL 外部卷为 `bbsmysql`。
+
+nginx 源站配置 `/etc/nginx/sites-available/bbs.jnsec.org`，80 端口按 Cookie 转发 `8080` / `8081`。外部 Cloudflare 提供 HTTPS，因此不能仅根据源站 HTTP 就关闭 Secure Cookie。本机 VPN 需绕过时，可通过 SSH ProxyCommand 将 TCP socket 的 `IP_BOUND_IF` 绑定实际物理网卡（本次 en0）。
+
+## 备份与回滚
+
+本次备份目录 `/opt/backup/bbs-refactor-20261025`（root 私有）：数据库备份、拆库前 `.env` / Compose、nginx 配置、校验和与发布 bundle。拆库前程序镜像 `bbs:pre-mirror-20261025`。
+
+回到拆库前的共享库部署：停止 timer 并等待 service 退出，恢复 `env.before-mirror` 和 `compose.before-mirror.yaml` 到原 Compose 目录，执行 `docker tag bbs:pre-mirror-20261025 bbs:latest`，再 `docker-compose up -d --no-deps app`。源 `flarum` 从未被同步脚本覆盖；不要删除它或其资源卷。旧站仍可通过 Cookie 切回。
+
+## 验证与后续工作
+
+已执行 Go race 测试、go vet、前端 TypeScript/Vite 构建；验证过历史内容、头像、登录、发布/编辑/回复/点赞，以及只读写接口拦截。同步已通过真实 MySQL 的新增/修改/删除、UTF-8、会话保留、故障回滚和重试测试。
+
+北京时间 2026-10-25 17:20 已观察到 timer 自动成功运行，耗时约 15 秒。公网 HTTPS 验证管理员写操作同样被拒绝，登录会话跨同步保留。清理测试账号后，源库与目标库各有 12,546 条帖子，全部评论正文校验和一致；测试账号在两库均为 0，生产未发布测试内容。可重复运行：
+
+```sh
+go test -race ./...
+go vet ./...
+python3 -m unittest discover -s scripts/tests -v
+# 真实 MySQL 集成测试会创建、删除专用测试库；不要用未知容器名
+BBS_SYNC_TEST_MYSQL=bbs-mysql python3 -m unittest discover -s scripts/tests -v
+```
+
+剩余边界详见 [PLAN.md](PLAN.md)：旧通知和部分扩展已完整保存但尚未接入新 UI；全局权限/第三方权限扩展仍需核对；新站写入格式和新上传头像在旧 PHP 中的完整互通尚未完成。本次只读迁移不会触发这些反向写入问题，不能据此宣称已完整替代所有 Flarum 功能。
