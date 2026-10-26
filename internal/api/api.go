@@ -165,16 +165,6 @@ func paginate(total, page, perPage int) (pages int) {
 	return pages
 }
 
-func parseUintSlice(ss []string) []uint {
-	out := make([]uint, 0, len(ss))
-	for _, v := range ss {
-		if n, err := strconv.ParseUint(v, 10, 32); err == nil && n > 0 {
-			out = append(out, uint(n))
-		}
-	}
-	return out
-}
-
 func parseUint(s string) (uint, error) {
 	v, err := strconv.ParseUint(s, 10, 32)
 	return uint(v), err

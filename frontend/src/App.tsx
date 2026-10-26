@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react"
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useParams } from "react-router"
 import { ThemeProvider } from "next-themes"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
@@ -5,19 +6,19 @@ import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Navbar } from "@/components/Navbar"
 import { useSession } from "@/lib/session"
-
-import HomePage from "@/pages/Home"
-import DiscussionPage from "@/pages/Discussion"
-import NewPostPage from "@/pages/NewPost"
-import EditPostPage from "@/pages/EditPost"
-import LoginPage from "@/pages/Login"
-import RegisterPage from "@/pages/Register"
-import ProfilePage from "@/pages/Profile"
-import SettingsPage from "@/pages/Settings"
-import NotificationsPage from "@/pages/Notifications"
-import SearchPage from "@/pages/Search"
-import AdminPage from "@/pages/Admin"
 import { Button } from "@/components/ui/button"
+
+const HomePage = lazy(() => import("@/pages/Home"))
+const DiscussionPage = lazy(() => import("@/pages/Discussion"))
+const NewPostPage = lazy(() => import("@/pages/NewPost"))
+const EditPostPage = lazy(() => import("@/pages/EditPost"))
+const LoginPage = lazy(() => import("@/pages/Login"))
+const RegisterPage = lazy(() => import("@/pages/Register"))
+const ProfilePage = lazy(() => import("@/pages/Profile"))
+const SettingsPage = lazy(() => import("@/pages/Settings"))
+const NotificationsPage = lazy(() => import("@/pages/Notifications"))
+const SearchPage = lazy(() => import("@/pages/Search"))
+const AdminPage = lazy(() => import("@/pages/Admin"))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -82,21 +83,23 @@ function Shell() {
             <a href="/switch-to-old" className="ml-2 font-medium text-primary underline underline-offset-2">前往旧站发布或修改</a>
           </div>
         )}
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/t/:slug" element={<RequireAuth><TagRedirect /></RequireAuth>} />
-          <Route path="/d/:idSlug" element={<RequireAuth><DiscussionPage /></RequireAuth>} />
-          <Route path="/post" element={<RequireAuth><RequireWritable><NewPostPage /></RequireWritable></RequireAuth>} />
-          <Route path="/posts/:id/edit" element={<RequireAuth><RequireWritable><EditPostPage /></RequireWritable></RequireAuth>} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RequireWritable><RegisterPage /></RequireWritable>} />
-          <Route path="/u/:username" element={<RequireAuth><ProfilePage /></RequireAuth>} />
-          <Route path="/settings" element={<RequireAuth><RequireWritable><SettingsPage /></RequireWritable></RequireAuth>} />
-          <Route path="/notifications" element={<RequireAuth><NotificationsPage /></RequireAuth>} />
-          <Route path="/search" element={<RequireAuth><SearchPage /></RequireAuth>} />
-          <Route path="/admin" element={<RequireAdmin><RequireWritable><AdminPage /></RequireWritable></RequireAdmin>} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <Suspense fallback={<div className="py-20 text-center text-muted-foreground">加载中…</div>}>
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/t/:slug" element={<RequireAuth><TagRedirect /></RequireAuth>} />
+            <Route path="/d/:idSlug" element={<RequireAuth><DiscussionPage /></RequireAuth>} />
+            <Route path="/post" element={<RequireAuth><RequireWritable><NewPostPage /></RequireWritable></RequireAuth>} />
+            <Route path="/posts/:id/edit" element={<RequireAuth><RequireWritable><EditPostPage /></RequireWritable></RequireAuth>} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RequireWritable><RegisterPage /></RequireWritable>} />
+            <Route path="/u/:username" element={<RequireAuth><ProfilePage /></RequireAuth>} />
+            <Route path="/settings" element={<RequireAuth><RequireWritable><SettingsPage /></RequireWritable></RequireAuth>} />
+            <Route path="/notifications" element={<RequireAuth><NotificationsPage /></RequireAuth>} />
+            <Route path="/search" element={<RequireAuth><SearchPage /></RequireAuth>} />
+            <Route path="/admin" element={<RequireAdmin><RequireWritable><AdminPage /></RequireWritable></RequireAdmin>} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   )

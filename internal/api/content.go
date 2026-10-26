@@ -3,6 +3,7 @@ package api
 import (
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -177,26 +178,11 @@ func (s *Server) loadUserProfileExtra(userID uint) (realName, blogURL string) {
 }
 
 func discussionURL(d *models.Discussion) string {
-	if s := d.Slug(); s == "" {
-		return http_disc(d.ID)
+	idStr := strconv.FormatUint(uint64(d.ID), 10)
+	if s := d.Slug(); s != "" {
+		return "/d/" + idStr + "-" + s
 	}
-	return "/d/" + strconvUint(d.ID) + "-" + d.Slug()
-}
-
-func http_disc(id uint) string { return "/d/" + strconvUint(id) }
-
-func strconvUint(id uint) string {
-	if id == 0 {
-		return "0"
-	}
-	var b [20]byte
-	i := len(b)
-	for id > 0 {
-		i--
-		b[i] = byte('0' + id%10)
-		id /= 10
-	}
-	return string(b[i:])
+	return "/d/" + idStr
 }
 
 // fillTagCounts 实时统计各版块的讨论数（Flarum tags 无计数列）。
