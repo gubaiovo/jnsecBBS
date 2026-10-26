@@ -18,7 +18,14 @@ import sys
 import tempfile
 import time
 
-LOCAL_TABLES = {"flarum_access_tokens"}  # Go browser sessions survive refreshes.
+# Source table schemas, including sessions, must remain compatible. Session rows
+# belong to the target, so Go logins survive each refresh.
+SESSION_TABLES = {"flarum_access_tokens"}
+# These tables belong only to the Go application and may be added by migrations.
+TARGET_ONLY_TABLES = {"bbs_user_profiles", "bbs_schema_migrations"}
+# Earlier Go deployments created these in the shared legacy database. If present
+# at the source they remain authoritative mirror tables; otherwise they are local.
+LEGACY_GO_TABLES = {"bbs_notifications", "bbs_invite_codes"}
 STATE_TABLE = "_bbs_sync_state"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 INSERT_TABLE = re.compile(rb"^INSERT INTO `([A-Za-z_][A-Za-z0-9_]*)` ")
@@ -69,15 +76,20 @@ class Mirror:
             tables.append(name)
         return tables
 
-    def schema(self, database):
+    def schema(self, database, tables):
         # Excludes changing AUTO_INCREMENT counters, includes column/default/index shape.
+        # Scope both sides to source tables: approved Go-only tables have their
+        # own versioned migrations and must never affect the mirror fingerprint.
+        for table in tables:
+            identifier(table)
+        selected = ",".join("'%s'" % table for table in sorted(tables))
         return self.mysql("SELECT TABLE_NAME,ORDINAL_POSITION,COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,"
                           "COALESCE(COLUMN_DEFAULT,'<NULL>'),EXTRA,COALESCE(COLLATION_NAME,''),"
                           "COALESCE(GENERATION_EXPRESSION,'') FROM information_schema.COLUMNS "
-                          "WHERE TABLE_SCHEMA='%s' AND TABLE_NAME<>'%s' ORDER BY TABLE_NAME,ORDINAL_POSITION;"
+                          "WHERE TABLE_SCHEMA='%s' AND TABLE_NAME IN (%s) ORDER BY TABLE_NAME,ORDINAL_POSITION;"
                           "SELECT TABLE_NAME,INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME,COALESCE(SUB_PART,0) "
-                          "FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='%s' AND TABLE_NAME<>'%s' "
-                          "ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX;" % (database, STATE_TABLE, database, STATE_TABLE))
+                          "FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='%s' AND TABLE_NAME IN (%s) "
+                          "ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX;" % (database, selected, database, selected))
 
     def dump(self, tables, path, schema=False):
         args = ["--single-transaction", "--quick", "--hex-blob", "--set-gtid-purged=OFF",
@@ -104,28 +116,30 @@ class Mirror:
                    "schema_hash CHAR(64) NOT NULL,completed_at DATETIME NULL,row_counts LONGTEXT NULL) ENGINE=InnoDB;"
                    "INSERT INTO %s (id,source_db,schema_hash) VALUES (1,'%s','%s');" %
                    (identifier(STATE_TABLE), identifier(STATE_TABLE), self.source,
-                    hashlib.sha256(self.schema(self.source).encode()).hexdigest()), self.target)
+                    hashlib.sha256(self.schema(self.source, tables).encode()).hexdigest()), self.target)
 
     def run(self, initialize, temporary):
         tables = self.tables(self.source)
-        if not tables or "flarum_posts" not in tables or STATE_TABLE in tables:
+        if not tables or "flarum_posts" not in tables or set(tables) & (TARGET_ONLY_TABLES | {STATE_TABLE}):
             raise RuntimeError("source is not a legacy Flarum database")
         if initialize:
             self.initialize(tables, temporary)
         target_tables = self.tables(self.target)
-        if set(target_tables) != set(tables) | {STATE_TABLE}:
+        allowed_local = TARGET_ONLY_TABLES | LEGACY_GO_TABLES
+        required = set(tables) | {STATE_TABLE}
+        if required - set(target_tables) or set(target_tables) - required - allowed_local:
             raise RuntimeError("table set changed; review schema before resuming synchronization")
-        source_schema = self.schema(self.source)
-        if source_schema != self.schema(self.target):
+        source_schema = self.schema(self.source, tables)
+        if source_schema != self.schema(self.target, tables):
             raise RuntimeError("source/target schema differs; review schema before synchronization")
         schema_hash = hashlib.sha256(source_schema.encode()).hexdigest()
         marker = self.mysql("SELECT source_db,schema_hash FROM %s WHERE id=1;" % identifier(STATE_TABLE), self.target).strip()
         if marker != self.source + "\t" + schema_hash:
             raise RuntimeError("source/schema does not match initialized target")
-        copied = [table for table in tables if table not in LOCAL_TABLES]
+        copied = [table for table in tables if table not in SESSION_TABLES]
         snapshot = temporary / "snapshot.sql"
         self.dump(copied, snapshot)
-        if self.schema(self.source) != source_schema:
+        if self.schema(self.source, tables) != source_schema:
             raise RuntimeError("source schema changed during snapshot; target unchanged")
         counts = collections.Counter({table: 0 for table in copied})
         insert_file = temporary / "inserts.sql"
