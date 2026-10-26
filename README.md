@@ -10,9 +10,10 @@ Go 论坛服务、React 前端与 Flarum 数据兼容层。前端产物内嵌于
 |---|---|
 | 旧 PHP Flarum | MySQL `flarum` 库，`bbs-php` 容器，源站 8081 |
 | 新 Go 论坛 | 独立 MySQL `bbs` 库，`bbs-app` 容器，仅绑定 `127.0.0.1:8080` |
-| 数据库 | 复用 `bbs-mysql` / MySQL 5.7 实例，两个独立数据库；没有新增 MySQL 容器 |
+| 影子转换库 | `bbs_v2`，使用独立账号，仅用于 native 数据模型验收，不供在线应用读取 |
+| 数据库 | 复用 `bbs-mysql` / MySQL 5.7 实例，没有新增 MySQL 容器 |
 | 网关 | Cloudflare HTTPS → 宿主机 nginx → PHP / Go |
-| 同步 | `jnsec-bbs-sync.timer` 每五分钟将旧库一致性快照同步到新库 |
+| 同步 | `jnsec-bbs-sync.timer` 每五分钟镜像到 `bbs`；`jnsec-bbs-native-sync.timer` 错开两分钟转换到 `bbs_v2` |
 
 公网入口已切换为**子域名分流**：`bbs.jnsec.org` → 旧 PHP 站（8081），`new.bbs.jnsec.org` → 新 Go 站（8080）。nginx 配置以仓库 [`deploy/nginx.conf.example`](deploy/nginx.conf.example) 为准，由部署脚本每次自动同步并 reload（需在 Cloudflare 为新子域添加 DNS 记录）；此前的 `site_version` Cookie 灰度已被取代。两站登录独立。新站页面显示只读提示，并链接到旧站进行发布和修改。
 
@@ -156,6 +157,18 @@ nginx 源站配置 `/etc/nginx/sites-available/bbs.jnsec.org`，80 端口按域�
 本次备份目录 `/opt/backup/bbs-refactor-20261025`（root 私有）：数据库备份、拆库前 `.env` / Compose、nginx 配置、校验和与发布 bundle。拆库前程序镜像 `bbs:pre-mirror-20261025`。
 
 回到拆库前的共享库部署：停止 timer 并等待 service 退出，恢复 `env.before-mirror` 和 `compose.before-mirror.yaml` 到原 Compose 目录，执行 `docker tag bbs:pre-mirror-20261025 bbs:latest`，再 `docker-compose up -d --no-deps app`。源 `flarum` 从未被同步脚本覆盖；不要删除它或其资源卷。旧站仍通过 `bbs.jnsec.org` 提供服务；恢复网关时应使用对应备份配置，不依赖已移除的 Cookie 切换入口。
+
+## 2026-10-26 部署验收
+
+- 已部署代码提交 `a37c8dd`，镜像带确切 Git revision 标签；应用及数据库健康检查通过。后续验收文档提交不改变已部署代码。
+- 已在目标 `bbs` 执行辅助表迁移，版本为 1、2。原镜像同步在新增目标本地表后继续成功。
+- 已初始化隔离的 `bbs_v2`，源账号仅 SELECT 旧库，目标账号仅授权影子库；实际连接配置保存于 root 私有的 `/etc/jnsec-bbs-native-sync.conf`。
+- 首轮及重复影子转换成功；重复刷新实测约 130 秒。两条五分钟 timer 均已启用，原镜像与影子转换相互独立。
+- 验收快照中，源库、在线镜像与影子库均为 12,590 条帖子；全部源正文哈希与影子原文匹配，35 张源表完成归档。行数随旧站使用变化，以任务成功记录为准。
+- 源站 nginx 验收登录、首页/最新列表、历史正文、头像、活动统计、管理员只读拒绝、跨同步会话及退出。临时账号在三个库均为 0，测试数据库已删除，未发布测试内容。
+- 冻结依赖构建的 CSS/JS 文件名哈希与原版本相同；本轮未修改前端源码和跟踪的产物。
+- 旧站公网 HTTPS 返回 200。`new.bbs.jnsec.org` 验收时尚无 DNS 解析，因此新站已验收的是源站 Host 路由，公网子域名还需补 DNS。
+- 新备份位于 `/opt/backup/bbs-refactor-20261026`，包含部署前数据库、环境、Compose 和 nginx；原应用镜像保留为 `bbs:pre-native-20261026`，部署脚本也保留 `bbs:rollback`。影子库回退只需停用影子 timer，不切换在线 DSN。
 
 ## 验证与后续工作
 
