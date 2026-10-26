@@ -1,0 +1,15 @@
+[Unit]
+Description=Convert legacy Flarum snapshot into the isolated native shadow database
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/jnsec-bbs-native-sync.conf
+ExecStart=/opt/bbs-native/bbs native-import -read-only-target
+TimeoutStartSec=240
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+

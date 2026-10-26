@@ -2,7 +2,7 @@
 
 Go 论坛服务、React 前端与 Flarum 数据兼容层。前端产物内嵌于单个 Go 二进制，保留 `/d/{id}`、`/t/{slug}` 等旧链接与 bcrypt 密码。未登录只显示欢迎页。
 
-## 当前线上状态（2026-10-25）
+## 当前线上状态（2026-10-26）
 
 迁移期间**旧站可写、新站只读**，以旧站为唯一数据来源：
 
@@ -26,8 +26,8 @@ Go 论坛服务、React 前端与 Flarum 数据兼容层。前端产物内嵌于
 - `init-db` 支持独立空 MySQL/SQLite 初始化，拒绝已有表的数据库；新安装不植入俱乐部专用版块。
 - `audit-content` 只读输出评论 ID 与还原正文的 SHA-256，用于迁移核对。
 - 旧库最佳答案扩展缺省值修复位于 `deploy/migrations/20261025-best-answer-default.sql`，仅补充默认值 0，不修改历史记录。
-- 实名与博客链接扩展表 `deploy/migrations/20261025-user-profiles.sql`：只读镜像阶段需在 `bbs` 库手工执行一次（应用只读启动不建表；未执行时读取降级为空）。
-- 生产 CSRF 密钥已轮换；配置模板不再带真实密钥。页面沿用现有布局，补全 Markdown 标题样式与只读提示。
+- 实名与博客链接扩展表由显式数据库迁移管理；只读应用启动不建表。`bbs_user_profiles` 与 `bbs_schema_migrations` 属于目标库，镜像同步保留它们。
+- 此前生产 CSRF 密钥已轮换；后续 owner 决策将实际配置纳入模板，风险及部署规则见下文。页面沿用现有布局，补全 Markdown 标题样式与只读提示。
 
 ## 首页与个人主页改版（2026-10-25）
 
@@ -39,12 +39,17 @@ Go 论坛服务、React 前端与 Flarum 数据兼容层。前端产物内嵌于
 
 ## 自动部署（CICD）
 
-推送到 `main` 即自动部署：CI（gofmt/vet/test + 前端构建）全绿后，deploy job 经 `appleboy/ssh-action` 连接 VPS 执行强制命令 `cd /opt/backup/refactorBBS/jnsecBBS && chmod +x run.sh && ./run.sh`（git pull → 同步配置 → `docker-compose build app` + `up -d --no-deps app` → nginx 子域名配置同步与 reload）。镜像在 VPS 本地构建：npm 走 npmmirror、Go 走 goproxy.cn。
+推送到 `main` 后，CI 完成 Go 检查和前端构建，SSH 只发送 `deploy <提交SHA>`。
+`run.sh` 严格解析强制命令中的 `SSH_ORIGINAL_COMMAND`，确认该 SHA 仍为远程 main，
+再以 Git archive 固定构建输入；不会把检查结束后出现的新提交或未跟踪文件混入构建。
+CI 和 Docker 均使用固定 Bun 1.4.4 与 `bun install --frozen-lockfile`。
 
-- GitHub Secrets 四个：`VPS_HOST` / `VPS_USER` / `VPS_SSH_KEY`（部署私钥）/ `VPS_FINGERPRINT`（主机指纹）。**指纹必须是握手实际协商算法的值**：Go SSH 客户端对本服务器实测协商 ECDSA（非 ED25519/RSA），换服务器后需用 Go 客户端重测，勿凭经验猜算法。
-- VPS 侧 authorized_keys 一行锁死：`restrict,command="cd /opt/backup/refactorBBS/jnsecBBS && chmod +x run.sh && ./run.sh",expiry-time="20270125"` + 公钥。任何一次连接等同触发一次部署。
-- `.env.example` 经 owner 决策携带真实生产配置（run.sh 每次部署同步为 `.env`）。**注意：仓库为公开仓库，密钥入库的泄露风险已知悉并接受**；后续如需收敛，在 VPS 轮换密码/密钥后把模板改回 CHANGE-ME 即可。
-- 手动部署兜底不变：VPS 上 `docker-compose build app && docker-compose up -d --no-deps app`。
+- GitHub Secrets：`VPS_HOST` / `VPS_USER` / `VPS_SSH_KEY` / `VPS_FINGERPRINT`。指纹必须对应服务器实际协商算法；现有部署使用 ECDSA。
+- VPS 的 authorized_keys 强制命令仍可使用 `cd /opt/backup/refactorBBS/jnsecBBS && chmod +x run.sh && ./run.sh`。新版脚本从原始 SSH 命令提取 SHA，不执行远端传入的任意 shell 文本。
+- 构建、应用健康检查或 nginx 验证失败时，恢复原镜像和配置；失败回滚无法完成时保留备份并报错。健康检查使用 `/api/health`，数据库不可连返回 503。
+- 保留此前 owner 明确决定的配置同步行为：每次部署从 `.env.example` / `config.example.yaml` 覆盖生产配置。公开模板携带实际配置的风险仍存在，本轮没有擅自轮换凭据。
+- 管理员部署已审阅 PR：在普通管理员会话运行 `./run.sh --reviewed <完整SHA>`；受限部署密钥无法使用此模式。自动部署只接受当前 main 的确切提交。
+- 首次安装新版部署脚本应由管理员完成；旧脚本尚不识别新 CI 的提交绑定协议。
 
 ## 五分钟同步脚本
 
@@ -52,7 +57,7 @@ Go 论坛服务、React 前端与 Flarum 数据兼容层。前端产物内嵌于
 
 行为：
 
-1. 检查源/目标表集合、列和索引结构，所有表必须为 InnoDB；结构变化时停止并保留上次成功数据，不能静默遗漏新扩展表。
+1. 检查镜像范围的表集合、列和索引，所有表必须为 InnoDB。目标允许独有的 `bbs_user_profiles`、`bbs_schema_migrations`；`bbs_notifications`、`bbs_invite_codes` 若源库已有则仍以源为准，否则作为目标本地表保留。未知目标表或镜像结构漂移仍会阻止同步。
 2. 使用 `mysqldump --single-transaction` 获取一致性快照；快照临时文件权限受限，结束后删除。
 3. 目标端在单个事务内 DELETE + INSERT；初始化不复制源触发器，避免重复执行业务逻辑。不使用 TRUNCATE、LOCK TABLES 或 `--force`。失败自动回滚，读取方看到提交前或提交后的完整版本。
 4. 以旧库为准同步新增、修改和删除。**会覆盖新库论坛数据，必须保持只读模式。**
@@ -87,6 +92,15 @@ sudo systemctl stop jnsec-bbs-sync.timer    # 暂停后续执行
 
 迁移结束后，先停止并禁用 timer，等待运行中的 service 完成，再做最终核对。若决定开放新站写入，还需给应用账号授予必要写权限并设 `READ_ONLY=false`；**绝不能在同步仍启用时开放新站写入**。
 
+## 独立 schema 影子迁移
+
+新增 `bbs native-import`，将旧 Flarum 核心数据转换到独立 `bbs_v2` schema，保留旧 ID、
+密码哈希、原始正文和完整源表归档。它可以重复刷新，并保留目标本地会话和资料。
+影子库不供在线应用读取，当前 Go 站仍使用 `bbs` 兼容库。
+
+数据模型、配置、五分钟影子任务和切换前提见 [docs/native-migration.md](docs/native-migration.md)。
+**不能直接把应用 DSN 改成 `bbs_v2`：native 运行时与扩展语义适配仍未完成。**
+
 ## 开发与独立安装
 
 ```sh
@@ -96,16 +110,21 @@ bun run build
 cd ..
 go build -o bbs ./cmd/bbs
 export JNSEC_SESSION_SECRET="$(openssl rand -hex 32)"
+./bbs init-db # 仅用于空库，已有数据库不要执行
 ./bbs serve
 ```
 
-默认 SQLite `./bbs.db`，首次启动建表；默认非只读。使用配置示例时请按场景设置 `read_only`，它是生产迁移模板。独立 MySQL 安装：创建空库并配置 DSN，以非只读模式执行 `./bbs init-db`，然后创建管理员和启动服务：
+默认 SQLite `./bbs.db`，新安装先显式执行 `./bbs init-db`；默认非只读。使用配置示例时请按场景设置 `read_only`，它是生产迁移模板。独立 MySQL 安装：创建空库并配置 DSN，以非只读模式执行 `./bbs init-db`，然后创建管理员和启动服务：
 
 ```sh
 ./bbs seed-admin -username admin -email admin@example.com -password '自行设置强密码'
 ```
 
 `seed-admin` 在只读模式下拒绝执行。不要对已导入的 Flarum 数据库运行 `init-db`。
+
+已有目标库由管理员使用独立迁移凭据执行 `./bbs migrate-db -c <配置文件>`；
+它只升级 Go 辅助表并登记 `bbs_schema_migrations`，不修改 Flarum 业务表。
+不要将该命令指向旧站源库。在线应用继续使用只读账号，启动只校验，不执行 DDL 或种子写入。
 
 ## 配置与部署
 
@@ -122,22 +141,21 @@ export JNSEC_SESSION_SECRET="$(openssl rand -hex 32)"
 | `JNSEC_ASSETS_DIR` | 旧资源路径，线上 `/flarum/public/assets` |
 | `JNSEC_REGISTRATION` | 非只读时的 invite/open 注册策略 |
 
-服务器 `139.162.121.96`；Compose 目录 `/opt/backup/refactorBBS/jnsecBBS`（git 克隆，`main` 分支）。日常由 CICD 自动部署；手动兜底只替换 app，不重启旧 PHP/MySQL：
+服务器 `139.162.121.96`；Compose 目录 `/opt/backup/refactorBBS/jnsecBBS`（git 克隆，`main` 分支）。日常由 CICD 自动部署；管理员手动部署也只替换 app，不重启旧 PHP/MySQL：
 
 ```sh
-docker-compose build app
-docker-compose up -d --no-deps app
+./run.sh <当前远程main的完整提交SHA>
 ```
 
 `wwwdata` 给 PHP 挂到 `/var/www/bbs`，给 Go 只读挂到 `/flarum`；两站共享旧头像和附件文件，无需每五分钟重复复制资源文件。`appdata` 保留 Go 原上传文件。MySQL 外部卷为 `bbsmysql`。
 
-nginx 源站配置 `/etc/nginx/sites-available/bbs.jnsec.org`，80 端口按 Cookie 转发 `8080` / `8081`。外部 Cloudflare 提供 HTTPS，因此不能仅根据源站 HTTP 就关闭 Secure Cookie。本机 VPN 需绕过时，可通过 SSH ProxyCommand 将 TCP socket 的 `IP_BOUND_IF` 绑定实际物理网卡（本次 en0）。
+nginx 源站配置 `/etc/nginx/sites-available/bbs.jnsec.org`，80 端口按域名转发 `8080` / `8081`。外部 Cloudflare 提供 HTTPS，因此不能仅根据源站 HTTP 就关闭 Secure Cookie。本机 VPN 需绕过时，可通过 SSH ProxyCommand 将 TCP socket 的 `IP_BOUND_IF` 绑定实际物理网卡（本次 en0）。
 
 ## 备份与回滚
 
 本次备份目录 `/opt/backup/bbs-refactor-20261025`（root 私有）：数据库备份、拆库前 `.env` / Compose、nginx 配置、校验和与发布 bundle。拆库前程序镜像 `bbs:pre-mirror-20261025`。
 
-回到拆库前的共享库部署：停止 timer 并等待 service 退出，恢复 `env.before-mirror` 和 `compose.before-mirror.yaml` 到原 Compose 目录，执行 `docker tag bbs:pre-mirror-20261025 bbs:latest`，再 `docker-compose up -d --no-deps app`。源 `flarum` 从未被同步脚本覆盖；不要删除它或其资源卷。旧站仍可通过 Cookie 切回。
+回到拆库前的共享库部署：停止 timer 并等待 service 退出，恢复 `env.before-mirror` 和 `compose.before-mirror.yaml` 到原 Compose 目录，执行 `docker tag bbs:pre-mirror-20261025 bbs:latest`，再 `docker-compose up -d --no-deps app`。源 `flarum` 从未被同步脚本覆盖；不要删除它或其资源卷。旧站仍通过 `bbs.jnsec.org` 提供服务；恢复网关时应使用对应备份配置，不依赖已移除的 Cookie 切换入口。
 
 ## 验证与后续工作
 

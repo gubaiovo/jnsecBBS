@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh the native shadow database every five minutes
+
+[Timer]
+# Offset from the existing mirror job to avoid simultaneous source snapshots.
+OnCalendar=*-*-* *:2/5:00
+AccuracySec=1s
+Persistent=true
+Unit=jnsec-bbs-native-sync.service
+
+[Install]
+WantedBy=timers.target

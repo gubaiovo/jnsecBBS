@@ -1,0 +1,6 @@
+# Install as /etc/jnsec-bbs-native-sync.conf with root ownership and mode 0600.
+# Source account: SELECT on the legacy database only.
+# Target account: confined to the isolated shadow database, never the live forum.
+# Use the host's loopback MySQL port; the native-import process runs on the host.
+JNSEC_IMPORT_SOURCE_DSN="native_source:CHANGE-ME@tcp(127.0.0.1:3306)/flarum?charset=utf8mb4&parseTime=true&loc=UTC"
+JNSEC_IMPORT_TARGET_DSN="native_target:CHANGE-ME@tcp(127.0.0.1:3306)/bbs_v2?charset=utf8mb4&parseTime=true&loc=UTC"
