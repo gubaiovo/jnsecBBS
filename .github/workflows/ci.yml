@@ -50,9 +50,19 @@ jobs:
         run: bun run build
 
   deploy:
-    name: 部署（SSH → run.sh）
+    name: 服务部署
     needs: [go, frontend]
-    if: github.event_name == 'push'
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      (
+        startsWith(github.event.head_commit.message, 'Merge pull request') ||
+        startsWith(github.event.head_commit.message, 'Merge branch') ||
+        contains(github.event.head_commit.message, 'pull request #') ||
+        contains(github.event.head_commit.message, '(#') ||
+        startsWith(github.event.head_commit.message, 'cicd') ||
+        startsWith(github.event.head_commit.message, 'CICD')
+      )
     runs-on: ubuntu-latest
     concurrency:
       group: deploy-production
