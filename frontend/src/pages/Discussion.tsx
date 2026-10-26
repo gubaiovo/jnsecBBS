@@ -11,6 +11,7 @@ import type { DiscussionDetail, Post } from "@/lib/types"
 import { MarkdownBody } from "@/components/MarkdownBody"
 import { MarkdownEditor } from "@/components/MarkdownEditor"
 import { Pagination } from "@/components/Pagination"
+import { PostEditor } from "@/components/PostEditor"
 import { GroupBadges, TagChip, UserAvatar } from "@/components/DiscussionParts"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -37,11 +38,15 @@ export function InlineDiscussion({ id, onBack }: { id: number; onBack: () => voi
 
 function DiscussionView({ id, idSlug = "", syncUrl = false }: { id: number; idSlug?: string; syncUrl?: boolean }) {
   const [params, setParams] = useSearchParams()
-  const [localPage, setLocalPage] = useState(1)
-  const page = syncUrl ? Number(params.get("page") ?? 1) || 1 : localPage
+  const requestedPage = Number(params.get("page") ?? 1)
+  const page = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
   const goPage = (p: number) => {
-    if (syncUrl) setParams({ page: String(p) })
-    else setLocalPage(p)
+    setParams((current) => {
+      const next = new URLSearchParams(current)
+      next.set("page", String(p))
+      next.delete("edit")
+      return next
+    })
   }
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -55,11 +60,11 @@ function DiscussionView({ id, idSlug = "", syncUrl = false }: { id: number; idSl
   // 旧链接 /d/{id} 规范化为 /d/{id}-{slug}（仅整页路由）
   useEffect(() => {
     if (syncUrl && data && idSlug !== `${data.discussion.id}-${data.discussion.slug}` && data.discussion.slug) {
-      navigate(discussionUrl(data.discussion.id, data.discussion.slug) + `?page=${page}`, {
+      navigate(discussionUrl(data.discussion.id, data.discussion.slug) + `?${params}`, {
         replace: true,
       })
     }
-  }, [data, idSlug, navigate, page, syncUrl])
+  }, [data, idSlug, navigate, params, syncUrl])
 
   const reply = useMutation({
     mutationFn: (content: string) =>
@@ -214,6 +219,18 @@ function ModBar({
 
 function PostItem({ p }: { p: Post }) {
   const { data: session } = useSession()
+  const [params, setParams] = useSearchParams()
+  const [editing, setEditing] = useState(params.get("edit") === String(p.id))
+  const closeEditor = () => {
+    setEditing(false)
+    if (params.get("edit") === String(p.id)) {
+      setParams((current) => {
+        const next = new URLSearchParams(current)
+        next.delete("edit")
+        return next
+      }, { replace: true })
+    }
+  }
   const qc = useQueryClient()
   const like = useMutation({
     mutationFn: () => api<{ liked: boolean; likeCount: number }>(`/api/posts/${p.id}/like`, { method: "POST" }),
@@ -248,17 +265,19 @@ function PostItem({ p }: { p: Post }) {
         <span className="ml-auto text-xs text-muted-foreground">#{p.number}</span>
       </header>
 
-      {p.hidden ? (
+      {editing && p.canEdit ? (
+        <PostEditor post={p} onClose={closeEditor} />
+      ) : p.hidden ? (
         <p className="text-sm text-muted-foreground">该回复已被隐藏。</p>
       ) : (
         <MarkdownBody html={p.html} />
       )}
 
       <footer className="mt-3 flex items-center gap-3 text-sm">
-        {p.canEdit && (
-          <Link to={`/posts/${p.id}/edit`} className="inline-flex items-center gap-1 text-muted-foreground hover:text-primary">
+        {p.canEdit && !editing && (
+          <button type="button" onClick={() => setEditing(true)} className="inline-flex items-center gap-1 text-muted-foreground hover:text-primary">
             <Pencil className="size-3.5" /> 编辑
-          </Link>
+          </button>
         )}
         {p.canHide && (
           <button

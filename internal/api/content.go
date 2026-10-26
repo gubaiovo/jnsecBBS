@@ -706,9 +706,30 @@ func (s *Server) postEditGet(c *gin.Context) {
 		return
 	}
 	var d models.Discussion
-	s.db.Select("id, slug").First(&d, p.DiscussionID)
+	if err := s.db.Select("id, slug, title").First(&d, p.DiscussionID).Error; err != nil {
+		fail(c, http.StatusInternalServerError, "加载失败，请重试。")
+		return
+	}
+	// 楼层号包含系统事件和已移除的回复，不能直接用楼层号推算分页。
+	var position int64
+	query := s.db.Model(&models.Post{}).
+		Where("discussion_id = ? AND type = ? AND is_approved = ? AND is_private = ?", d.ID, "comment", true, false)
+	if p.Number != nil {
+		query = query.Where("number <= ? OR number IS NULL", *p.Number)
+	} else {
+		query = query.Where("number IS NULL")
+	}
+	if err := query.Count(&position).Error; err != nil {
+		fail(c, http.StatusInternalServerError, "加载失败，请重试。")
+		return
+	}
+	page := 1
+	if position > 0 {
+		page = int((position-1)/perPagePosts) + 1
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"id":         p.ID,
+		"page":       page,
 		"content":    p.Markdown(),
 		"discussion": gin.H{"id": d.ID, "slug": d.Slug(), "title": d.Title},
 	})

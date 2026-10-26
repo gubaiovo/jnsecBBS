@@ -22,6 +22,10 @@ export default function HomePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedId = Number(searchParams.get("d")) || 0
   const openDiscussion = (id: number) => setSearchParams({ d: String(id) })
+  const selectBoard = (slug: string) => {
+    setBoard(slug)
+    setSearchParams({})
+  }
 
   const { data: homeData, isLoading: homeLoading } = useQuery({
     queryKey: ["home"],
@@ -55,8 +59,7 @@ export default function HomePage() {
     if (homeLoading || !searchParams.has("board")) return
     const b = searchParams.get("board") ?? ""
     if (allSlugs.has(b)) setBoard(b)
-    const d = searchParams.get("d")
-    setSearchParams(d ? { d } : {}, { replace: true })
+    setSearchParams({}, { replace: true })
   }, [homeLoading, searchParams, setSearchParams, allSlugs, setBoard])
 
   // 主栏：全部 → /api/recent；选中板块 → 该板块文章列表（含子板块）
@@ -106,9 +109,9 @@ export default function HomePage() {
         <div className="grid gap-5 min-[880px]:grid-cols-[160px_minmax(0,1fr)_240px]">
           {/* 移动端：板块横滑条 */}
           <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 min-[880px]:hidden">
-            <BoardChip slug="all" name="全部" active={isAll} onClick={setBoard} />
+            <BoardChip slug="all" name="全部" active={isAll} onClick={selectBoard} />
             {boards.map((t) => (
-              <BoardChip key={t.id} slug={t.slug} name={t.name} color={t.color} active={activeTop === t.slug} onClick={setBoard} />
+              <BoardChip key={t.id} slug={t.slug} name={t.name} color={t.color} active={activeTop === t.slug} onClick={selectBoard} />
             ))}
           </div>
 
@@ -136,11 +139,11 @@ export default function HomePage() {
                 ) : (
                   <>
                     <li>
-                      <BoardLink slug="all" name="全部" active={isAll} onClick={setBoard} />
+                      <BoardLink slug="all" name="全部" active={isAll} onClick={selectBoard} />
                     </li>
                     {boards.map((t) => (
                       <li key={t.id}>
-                        <BoardLink slug={t.slug} name={t.name} color={t.color} count={t.discussionsCount} active={activeTop === t.slug} onClick={setBoard} />
+                        <BoardLink slug={t.slug} name={t.name} color={t.color} count={t.discussionsCount} active={activeTop === t.slug} onClick={selectBoard} />
                       </li>
                     ))}
                   </>
@@ -152,7 +155,7 @@ export default function HomePage() {
           {/* 中栏：内嵌文章详情 或 当前板块文章列表 */}
           <div className="min-w-0">
             {selectedId > 0 ? (
-              <InlineDiscussion id={selectedId} onBack={() => setSearchParams({})} />
+              <InlineDiscussion key={selectedId} id={selectedId} onBack={() => setSearchParams({})} />
             ) : (
               <>
                 <div className="mb-3 flex items-baseline justify-between gap-2">
