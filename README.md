@@ -96,6 +96,9 @@ sudo systemctl stop jnsec-bbs-sync.timer    # 暂停后续执行
 
 ## 开发与独立安装
 
+独立可写测试机 `10.1.63.202` 的部署、资源和构建限制见
+[测试环境说明](docs/test-deployment.md)。该环境与生产隔离，不执行五分钟同步。
+
 ```sh
 cd frontend
 bun install --frozen-lockfile
