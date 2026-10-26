@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -342,5 +341,3 @@ func (s *Server) adminSettingsSave(c *gin.Context) {
 	s.db.Save(&models.Setting{Key: models.SettingKeyWelcomeText, Value: strings.TrimSpace(body.WelcomeText)})
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
-
-var _ = strconv.Itoa

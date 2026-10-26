@@ -3,7 +3,6 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"image/png"
 	"io"
 	"log"
@@ -402,5 +401,3 @@ func (s *Server) notificationsRead(c *gin.Context) {
 		Where("user_id = ? AND read_at IS NULL", u.ID).Update("read_at", now)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
-
-var _ = fmt.Sprintf
