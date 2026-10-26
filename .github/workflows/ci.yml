@@ -77,5 +77,4 @@ jobs:
           fingerprint: ${{ secrets.VPS_FINGERPRINT }}
           command_timeout: 30m
           script: |
-            cd /opt/backup/refactorBBS/jnsecBBS
-            bash run.sh
+            cd /opt/backup/refactorBBS/jnsecBBS && chmod +x run.sh && ./run.sh
