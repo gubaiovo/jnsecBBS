@@ -78,8 +78,8 @@ var schemaStatements = []string{
 		row_count BIGINT UNSIGNED NOT NULL
 	)`,
 	`CREATE TABLE legacy_rows (
-		source_table VARCHAR(64) NOT NULL, row_number BIGINT UNSIGNED NOT NULL,
-		values_json LONGTEXT NOT NULL, PRIMARY KEY (source_table,row_number)
+		source_table VARCHAR(64) NOT NULL, row_ordinal BIGINT UNSIGNED NOT NULL,
+		values_json LONGTEXT NOT NULL, PRIMARY KEY (source_table,row_ordinal)
 	)`,
 	`CREATE TABLE sessions (
 		token_hash BINARY(32) PRIMARY KEY, user_id BIGINT UNSIGNED NOT NULL, expires_at DATETIME(6) NOT NULL,

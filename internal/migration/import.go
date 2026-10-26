@@ -70,6 +70,8 @@ func open(dsn string) (*sql.DB, error) {
 		c.Params = make(map[string]string)
 	}
 	c.Params["charset"], c.Params["time_zone"] = "utf8mb4", "'+00:00'"
+	// Refuse lossy truncation/coercion while preserving legacy zero dates and IDs.
+	c.Params["sql_mode"] = "'STRICT_ALL_TABLES,NO_AUTO_VALUE_ON_ZERO'"
 	db, err := sql.Open("mysql", c.FormatDSN())
 	if err != nil {
 		return nil, failed("database configuration")
@@ -306,6 +308,13 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if err := validate(ctx, write); err != nil {
 		return nil, err
 	}
+	currentTarget, err := catalog(ctx, write, false)
+	if err != nil {
+		return nil, err
+	}
+	if fingerprint(currentTarget) != targetHash {
+		return nil, errors.New("native target schema changed during refresh; target unchanged")
+	}
 	for _, name := range managedTables {
 		identifier, _ := quoted(name)
 		var count int64
@@ -328,7 +337,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, failed("source snapshot completion")
 	}
 	if err := write.Commit(); err != nil {
-		return nil, failed("target commit; inspect ownership marker before retry")
+		return nil, errors.New("native target commit result is unknown; inspect the success marker before retrying")
 	}
 	return result, nil
 }
@@ -374,7 +383,7 @@ func copyTable(ctx context.Context, read, write *sql.Tx, t table) (int64, error)
 		}
 		encoded, _ := json.Marshal(archive)
 		count++
-		if _, err := write.ExecContext(ctx, "INSERT INTO legacy_rows (source_table,row_number,values_json) VALUES (?,?,?)", t.name, count, encoded); err != nil {
+		if _, err := write.ExecContext(ctx, "INSERT INTO legacy_rows (source_table,row_ordinal,values_json) VALUES (?,?,?)", t.name, count, encoded); err != nil {
 			return 0, failed("source archive write")
 		}
 		if err := convert(ctx, write, t.name, row); err != nil {
