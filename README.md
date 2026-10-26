@@ -1,6 +1,6 @@
 # JNSEC BBS（Go + React）
 
-Go 论坛服务、React 前端与 Flarum 数据兼容层。前端产物内嵌于单个 Go 二进制，保留 `/d/{id}`、`/t/{slug}` 等旧链接与 bcrypt 密码。未登录只显示欢迎页。
+Go + React + Flarum 兼容。前端内嵌于 Go 二进制。
 
 ## 当前线上状态（2026-10-26）
 
@@ -29,14 +29,6 @@ Go 论坛服务、React 前端与 Flarum 数据兼容层。前端产物内嵌于
 - 旧库最佳答案扩展缺省值修复位于 `deploy/migrations/20261025-best-answer-default.sql`，仅补充默认值 0，不修改历史记录。
 - 实名与博客链接扩展表由显式数据库迁移管理；只读应用启动不建表。`bbs_user_profiles` 与 `bbs_schema_migrations` 属于目标库，镜像同步保留它们。
 - 此前生产 CSRF 密钥已轮换；后续 owner 决策将实际配置纳入模板，风险及部署规则见下文。页面沿用现有布局，补全 Markdown 标题样式与只读提示。
-
-## 首页与个人主页改版（2026-10-25）
-
-- **三栏首页**：左栏九大板块导航（色点 + 帖数，选中态 nanostores 持久化）；中栏当前板块文章列表（默认全部，`/api/recent`；分页加载更多）；右栏"最新文章"排除周报板块（`/api/recent?exclude=weekly`，按名称匹配周报）。
-- **内嵌文章详情**：中栏点击整行在 `?d=<id>` 打开详情（复用整页路由组件，旧链接 `/d/{id}-{slug}` 行为不变），"返回列表"/浏览器后退回列表；右栏最新文章同样内嵌打开。
-- **移除独立板块主页**：`/t/{slug}` 重定向到首页并选中对应板块（含子板块，父板块在左栏高亮）。
-- **个人主页**：GitHub 风格年度贡献热力图（`/api/users/:username/activity`，按北京时间分桶聚合发帖+回复；月份/星期标签、五档色、年份切换）；实名徽章与博客外链（`bbs_user_profiles` 表，编辑入口随只读模式禁用，切写后开放）。
-- 设置页新增实名/博客字段并修复签名框首次加载为空的问题；Profile 页区分 401/404 提示；导航栏最左新增后退按钮。
 
 ## 自动部署（CICD）
 
@@ -142,7 +134,7 @@ export JNSEC_SESSION_SECRET="$(openssl rand -hex 32)"
 | `JNSEC_ASSETS_DIR` | 旧资源路径，线上 `/flarum/public/assets` |
 | `JNSEC_REGISTRATION` | 非只读时的 invite/open 注册策略 |
 
-服务器 `139.162.121.96`；Compose 目录 `/opt/backup/refactorBBS/jnsecBBS`（git 克隆，`main` 分支）。日常由 CICD 自动部署；管理员手动部署也只替换 app，不重启旧 PHP/MySQL：
+服务器 `139.162.121.96`；Compose 目录 `/opt/backup/refactorBBS/jnsecBBS`（Git 检出，部署时固定到验收提交）。日常由 CICD 自动部署；管理员手动部署也只替换 app，不重启旧 PHP/MySQL：
 
 ```sh
 ./run.sh <当前远程main的完整提交SHA>
@@ -172,16 +164,13 @@ nginx 源站配置 `/etc/nginx/sites-available/bbs.jnsec.org`，80 端口按域�
 
 ## 验证与后续工作
 
-已执行 Go race 测试、go vet、前端 TypeScript/Vite 构建；验证过历史内容、头像、登录、发布/编辑/回复/点赞，以及只读写接口拦截。同步已通过真实 MySQL 的新增/修改/删除、UTF-8、会话保留、故障回滚和重试测试。
-
-北京时间 2026-10-25 17:20 已观察到 timer 自动成功运行，耗时约 15 秒。公网 HTTPS 验证管理员写操作同样被拒绝，登录会话跨同步保留。清理测试账号后，源库与目标库各有 12,546 条帖子，全部评论正文校验和一致；测试账号在两库均为 0，生产未发布测试内容。可重复运行：
+Go race/vet、前端冻结依赖构建、MySQL 5.7/8.4 转换及回滚测试已通过。部署验收见上节。
 
 ```sh
 go test -race ./...
 go vet ./...
 python3 -m unittest discover -s scripts/tests -v
-# 真实 MySQL 集成测试会创建、删除专用测试库；不要用未知容器名
-BBS_SYNC_TEST_MYSQL=bbs-mysql python3 -m unittest discover -s scripts/tests -v
 ```
 
-剩余边界详见 [PLAN.md](PLAN.md)：旧通知和部分扩展已完整保存但尚未接入新 UI；全局权限/第三方权限扩展仍需核对；新站写入格式和新上传头像在旧 PHP 中的完整互通尚未完成。本次只读迁移不会触发这些反向写入问题，不能据此宣称已完整替代所有 Flarum 功能。
+原始扩展数据已归档，但 native 运行时、附件、通知及第三方权限语义仍需适配。
+下一阶段见 [PLAN.md](PLAN.md)，独立 schema 说明见 [docs/native-migration.md](docs/native-migration.md)。
