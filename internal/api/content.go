@@ -67,11 +67,16 @@ func (s *Server) home(c *gin.Context) {
 }
 
 // recent 全站最新讨论流（首页主栏与右侧最新栏共用）。
-// exclude=slug1,slug2 排除指定版块（如周报），供侧栏最新列表使用。
+// recent 讨论列表：支持 sidebar=1 自动在服务端排除周报版块，亦兼容客户端传入 exclude=slug1,slug2。
 func (s *Server) recent(c *gin.Context) {
 	u := s.currentUser(c)
 	base := s.visibleDiscussions(u).
 		Where("flarum_discussions.hidden_at IS NULL AND flarum_discussions.is_approved = 1")
+	if c.Query("sidebar") == "1" {
+		base = base.Where(
+			"NOT EXISTS (SELECT 1 FROM flarum_discussion_tag sdt JOIN flarum_tags st ON st.id = sdt.tag_id " +
+				"WHERE sdt.discussion_id = flarum_discussions.id AND st.name LIKE '%周报%')")
+	}
 	if ex := strings.Split(c.Query("exclude"), ","); len(ex) > 0 {
 		slugs := make([]string, 0, len(ex))
 		for _, s := range ex {

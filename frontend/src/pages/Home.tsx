@@ -59,18 +59,6 @@ export default function HomePage() {
     setSearchParams(d ? { d } : {}, { replace: true })
   }, [homeLoading, searchParams, setSearchParams, allSlugs, setBoard])
 
-  // 右侧最新栏排除周报板块：按名称匹配（大板块与子板块都查）
-  const weeklySlugs = useMemo(() => {
-    const slugs: string[] = []
-    for (const c of homeData?.cards ?? []) {
-      if (c.tag.name.includes("周报")) slugs.push(c.tag.slug)
-      for (const ch of c.children) {
-        if (ch.name.includes("周报")) slugs.push(ch.slug)
-      }
-    }
-    return slugs
-  }, [homeData])
-
   // 主栏：全部 → /api/recent；选中板块 → 该板块文章列表（含子板块）
   const main = useInfiniteQuery({
     queryKey: isAll ? ["recent", "feed"] : ["tag-discussions", active],
@@ -83,13 +71,10 @@ export default function HomePage() {
   const mainItems = main.data?.pages.flatMap((p) => p.items) ?? []
   const mainTotal = main.data?.pages[0]?.page.total
 
-  // 右侧最新栏：全站最新，排除周报
+  // 右侧最新栏：全站最新，服务端 sidebar=1 自动过滤周报
   const sidebar = useQuery({
-    queryKey: ["recent", "sidebar", weeklySlugs],
-    queryFn: () =>
-      api<RecentData>(
-        `/api/recent?page=1${weeklySlugs.length ? `&exclude=${weeklySlugs.map(encodeURIComponent).join(",")}` : ""}`,
-      ),
+    queryKey: ["recent", "sidebar"],
+    queryFn: () => api<RecentData>("/api/recent?page=1&sidebar=1"),
     enabled: !!user,
   })
 
