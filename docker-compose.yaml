@@ -74,10 +74,10 @@ services:
       - appdata:/app/data
       - wwwdata:/flarum:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/me >/dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+      test: ["CMD-SHELL", "wget -qO- -T 3 http://127.0.0.1:8080/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
       start_period: 10s
     logging:
       driver: json-file

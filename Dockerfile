@@ -1,18 +1,18 @@
-FROM node:22-alpine AS frontend
+FROM oven/bun:1.4.4-alpine AS frontend
 WORKDIR /src/frontend
-COPY frontend/package.json frontend/bunfig.toml ./
-RUN npm install --legacy-peer-deps --registry=https://registry.npmmirror.com
+COPY frontend/package.json frontend/bun.lock frontend/bunfig.toml ./
+RUN bun install --frozen-lockfile
 COPY frontend/ ./
-RUN npm run build
+RUN bun --bun run build
 
-FROM golang:1.25-alpine AS build
+FROM golang:1.25.4-alpine AS build
 WORKDIR /src
-ENV GOPROXY=https://goproxy.cn,https://goproxy.io,direct
+ENV GOPROXY=https://goproxy.cn,https://goproxy.io,direct GOTOOLCHAIN=local
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend /src/internal/frontend/dist internal/frontend/dist
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /bbs ./cmd/bbs
+RUN CGO_ENABLED=0 go build -mod=readonly -trimpath -ldflags="-s -w" -o /bbs ./cmd/bbs
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata
