@@ -3,8 +3,9 @@ package models
 import "time"
 
 // UserProfile 是 Go 专属的用户扩展资料（实名、博客链接）。
-// 独立 bbs_user_profiles 表：五分钟同步只覆盖 flarum_* 表，这里的数据不会被
-// 旧库快照冲掉。只读镜像阶段该表可能尚未创建，读取方必须容忍缺表并降级为空。
+// bbs_user_profiles is explicitly preserved by snapshot sync as target-local
+// data. It may be absent on an unupgraded read-only mirror, so reads degrade
+// to empty fields until an operator runs migrate-db.
 type UserProfile struct {
 	UserID    uint      `gorm:"column:user_id;primaryKey"`
 	RealName  string    `gorm:"column:real_name;type:varchar(100)"`

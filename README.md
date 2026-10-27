@@ -160,8 +160,23 @@ cd ..
 
 go build -o bbs ./cmd/bbs
 export JNSEC_SESSION_SECRET="$(openssl rand -hex 32)"
+./bbs init-db -c config-test.yaml  # 仅适用于空数据库
 ./bbs serve -c config-test.yaml
 ```
+
+应用启动仅校验数据库，不自动建表。已有兼容库由管理员显式执行
+`./bbs migrate-db -c config-test.yaml`，升级 Go 辅助表与迁移版本记录；不要对旧站源库
+运行该命令。只读镜像同步会保留 `bbs_user_profiles`、`bbs_schema_migrations` 等已批准
+本地表，继续拒绝未知表及结构漂移。
+
+`bbs native-import` 可将旧站快照转换到隔离的 `bbs_v2` 影子库，保留原始数据归档。
+在线 API 尚未适配该结构，不可直接修改应用 DSN。详见
+[独立数据库迁移](docs/native-migration.md) 和 [当前进度](PLAN.md)。
+
+本轮修复回复原位编辑、分类返回列表及分页跳转（#5–#7），保持现有三栏样式。
+验收使用本机合成数据，覆盖普通成员、取消/失败重试、首页/末页/指定页和移动分类。
+部署文件与目录沿用目标分支现状：`run.sh`、`Dockerfile`、`docker-compose.yaml`、
+`config.example.yaml`、`deploy/`、`.github/` 不在本 PR 的修改范围。
 
 ### 生产同步任务维护
 ```bash

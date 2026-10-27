@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// Open 按配置打开数据库（生产 MySQL 指向 flarum 库；本地 SQLite 自动建 flarum 结构）。
+// Open only connects. Schema changes require init-db or migrate-db explicitly.
 func Open(driver, dsn string) (*gorm.DB, error) {
 	var dialector gorm.Dialector
 	switch driver {
@@ -26,79 +26,9 @@ func Open(driver, dsn string) (*gorm.DB, error) {
 	})
 }
 
-// Migrate 确保表结构，按驱动分流：
-//   - MySQL（生产）：flarum_* 表由 PHP 侧管理，**绝不使用 AutoMigrate**——
-//     GORM 会递归跟随模型关联去 ALTER 被关联的 flarum 表（如把 user_id 改成
-//     bigint unsigned，被外键约束拒绝）。两张 Go 专属辅助表用裸 DDL
-//     CREATE TABLE IF NOT EXISTS 创建，零递归、零风险。
-//   - SQLite（本地开发）：全部表按模型自动创建（首次启动即为 flarum 结构）。
-func Migrate(g *gorm.DB, seed bool) error {
-	if g.Dialector.Name() == "mysql" {
-		if err := createBBSTablesMySQL(g); err != nil {
-			return fmt.Errorf("migrate bbs tables: %w", err)
-		}
-		if err := ensureMySQLCompatibility(g); err != nil {
-			return err
-		}
-		if seed {
-			return SeedDefaults(g)
-		}
-		return nil
-	}
-	if err := migrateModels(g); err != nil {
-		return err
-	}
-	if seed {
-		return SeedDefaults(g)
-	}
-	return nil
-}
-
-// createBBSTablesMySQL 用裸 DDL 创建 Go 专属辅助表（幂等）。
-// 不走 AutoMigrate：其会递归跟随模型关联（Notification→Discussion/Sender）
-// 去 ALTER flarum 表，已被外键约束拒绝过一次（Error 1832）。
-func createBBSTablesMySQL(g *gorm.DB) error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS bbs_notifications (
-			id int unsigned NOT NULL AUTO_INCREMENT,
-			user_id int unsigned NOT NULL,
-			sender_id int unsigned NOT NULL,
-			type varchar(100) NOT NULL,
-			discussion_id int unsigned NOT NULL,
-			post_id int unsigned NOT NULL,
-			read_at datetime DEFAULT NULL,
-			created_at datetime NOT NULL,
-			PRIMARY KEY (id),
-			KEY idx_bbs_notif (user_id, type)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-		`CREATE TABLE IF NOT EXISTS bbs_invite_codes (
-			code varchar(20) NOT NULL,
-			created_by int unsigned NOT NULL,
-			used_by int unsigned DEFAULT NULL,
-			used_at datetime DEFAULT NULL,
-			expires_at datetime DEFAULT NULL,
-			created_at datetime NOT NULL,
-			PRIMARY KEY (code)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-		`CREATE TABLE IF NOT EXISTS bbs_user_profiles (
-			user_id int unsigned NOT NULL,
-			real_name varchar(100) NOT NULL DEFAULT '',
-			blog_url varchar(255) NOT NULL DEFAULT '',
-			updated_at datetime NOT NULL,
-			PRIMARY KEY (user_id)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-	}
-	for _, s := range stmts {
-		if err := g.Exec(s).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ensureMySQLCompatibility 生产启动自检：确认 Go 依赖的 flarum_* 表全部存在。
+// checkFlarumTables confirms that the legacy schema has already been installed.
 // 缺表（如 DSN 指到空库、或扩展未安装）时给出可读的报错，而不是在请求半路崩。
-func ensureMySQLCompatibility(g *gorm.DB) error {
+func checkFlarumTables(g *gorm.DB) error {
 	required := []string{
 		"flarum_users", "flarum_groups", "flarum_group_user",
 		"flarum_discussions", "flarum_posts", "flarum_tags",
@@ -112,15 +42,17 @@ func ensureMySQLCompatibility(g *gorm.DB) error {
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("数据库缺少 Flarum 表（DSN 是否指向了 flarum 库？）: %v", missing)
+		return fmt.Errorf("数据库缺少所需 Flarum 表（空库请先运行 bbs init-db）: %v", missing)
 	}
 	return nil
 }
 
-// SeedDefaults 首次启动（空库，仅本地 SQLite 路径）时预置用户组与默认版块结构。
+// SeedDefaults is used only by explicit standalone initialization.
 func SeedDefaults(g *gorm.DB) error {
 	var n int64
-	g.Model(&models.Group{}).Count(&n)
+	if err := g.Model(&models.Group{}).Count(&n).Error; err != nil {
+		return err
+	}
 	if n == 0 {
 		groups := []models.Group{
 			{ID: models.GroupAdmin, NameSingular: "Admin", NamePlural: "Admin", Color: "#e53935", Icon: "fas fa-wrench"},
@@ -163,6 +95,9 @@ func InitializeEmpty(g *gorm.DB) error {
 	if err := migrateModels(g); err != nil {
 		return err
 	}
+	if err := Migrate(g); err != nil {
+		return err
+	}
 	return SeedDefaults(g)
 }
 
@@ -179,13 +114,31 @@ func migrateModels(g *gorm.DB) error {
 
 // CheckReadOnly verifies an initialized mirror without DDL or seed writes.
 func CheckReadOnly(g *gorm.DB) error {
-	if err := ensureMySQLCompatibility(g); err != nil {
+	if err := checkFlarumTables(g); err != nil {
 		return err
 	}
 	for _, table := range []string{"bbs_notifications", "bbs_invite_codes"} {
 		if err := g.Exec("SELECT 1 FROM `" + table + "` LIMIT 1").Error; err != nil {
-			return fmt.Errorf("read-only database missing %s", table)
+			return fmt.Errorf("database missing %s; run bbs migrate-db explicitly", table)
 		}
+	}
+	return nil
+}
+
+// CheckWritable validates an upgraded database without DDL or seed writes.
+func CheckWritable(g *gorm.DB) error {
+	if err := CheckReadOnly(g); err != nil {
+		return err
+	}
+	if err := g.Exec("SELECT user_id, real_name, blog_url, updated_at FROM bbs_user_profiles LIMIT 0").Error; err != nil {
+		return fmt.Errorf("user profile schema unavailable; run bbs migrate-db: %w", err)
+	}
+	applied, err := migrationHistory(g)
+	if err != nil {
+		return fmt.Errorf("migration history unavailable; run bbs migrate-db: %w", err)
+	}
+	if len(applied) != len(migrations) {
+		return fmt.Errorf("database has pending migrations; run bbs migrate-db")
 	}
 	return nil
 }

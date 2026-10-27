@@ -44,6 +44,8 @@ func (s *Server) Handler() http.Handler {
 		_ = r.SetTrustedProxies(nil)
 	}
 	r.MaxMultipartMemory = 4 << 20
+	// Readiness must not depend on a browser session or expose database errors.
+	r.GET("/api/health", s.health)
 	r.Use(s.sessionMiddleware())
 
 	// REST API

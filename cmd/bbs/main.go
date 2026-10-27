@@ -43,6 +43,12 @@ func main() {
 			}
 			log.Println("数据库初始化完成。")
 			return
+		case "migrate-db":
+			migrateDBCmd(os.Args[2:])
+			return
+		case "native-import":
+			nativeImportCmd(os.Args[2:])
+			return
 		case "seed-admin":
 			seedAdminCmd(os.Args[2:])
 			return
@@ -60,6 +66,9 @@ func usage() {
 用法:
   bbs audit-content [-c config.yaml]      只读输出正文源文本校验和
   bbs init-db [-c config.yaml]            初始化独立空库（拒绝已有表）
+  bbs migrate-db [-c config.yaml]         显式升级 Go 辅助表（不改 Flarum 表）
+  bbs native-import [-initialize] -read-only-target
+                                          导入独立原生影子库（DSN 从导入环境变量读取）
   bbs serve [-c config.yaml]              启动服务
   bbs seed-admin [-c config.yaml] -username x -email x@y -password xxx
                                           创建/提升管理员
@@ -77,7 +86,7 @@ func loadCfg(args []string) *config.Config {
 	return cfg
 }
 
-func openDB(cfg *config.Config, seed bool) *gorm.DB {
+func openDB(cfg *config.Config) *gorm.DB {
 	g, err := db.Open(cfg.Database.Driver, cfg.Database.DSN)
 	if err != nil {
 		log.Fatalf("连接数据库失败: %v", err)
@@ -88,8 +97,8 @@ func openDB(cfg *config.Config, seed bool) *gorm.DB {
 		}
 		return g
 	}
-	if err := db.Migrate(g, seed); err != nil {
-		log.Fatalf("数据库迁移失败: %v", err)
+	if err := db.CheckWritable(g); err != nil {
+		log.Fatalf("数据库校验失败: %v", err)
 	}
 	return g
 }
@@ -118,7 +127,7 @@ func serveCmd(args []string) {
 	if cfg.AssetsDir == "" {
 		log.Println("[警告] JNSEC_ASSETS_DIR 未配置：旧 Flarum 头像/附件（/assets/*）将无法访问，全部回退首字母头像。")
 	}
-	g := openDB(cfg, true)
+	g := openDB(cfg)
 
 	srv, err := web.New(cfg, g)
 	if err != nil {
@@ -173,7 +182,7 @@ func seedAdminCmd(args []string) {
 	if cfg.ReadOnly {
 		log.Fatal("只读模式禁止创建或修改管理员")
 	}
-	g := openDB(cfg, true)
+	g := openDB(cfg)
 
 	if *username == "" || *email == "" || len(*password) < 8 {
 		log.Fatal("需要 -username -email -password（密码至少 8 位）")

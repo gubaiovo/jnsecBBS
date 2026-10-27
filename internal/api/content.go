@@ -111,7 +111,7 @@ func (s *Server) recent(c *gin.Context) {
 // cst 站点受众时区：贡献热力图按北京时间分桶（Flarum 库内以 UTC 存 DATETIME）。
 var cst = time.FixedZone("Asia/Shanghai", 8*3600)
 
-// userActivity 贡献热力图数据：某用户一年内发帖 + 回复按日计数。
+// userActivity 贡献热力图数据：某用户一年内发帖 + 非首帖回复按日计数。
 // 年份边界按北京时间计算后转 UTC 再过滤，避免 16:00-24:00 的活动跨日错桶。
 func (s *Server) userActivity(c *gin.Context) {
 	var p models.User
@@ -134,16 +134,25 @@ func (s *Server) userActivity(c *gin.Context) {
 	dq := s.visibleDiscussions(viewer).
 		Where("flarum_discussions.user_id = ? AND flarum_discussions.created_at >= ? AND flarum_discussions.created_at < ?", p.ID, start, end)
 	pq := s.visiblePosts(viewer).
-		Where("flarum_posts.user_id = ? AND flarum_posts.created_at >= ? AND flarum_posts.created_at < ? AND flarum_posts.hidden_at IS NULL AND flarum_posts.type = ? AND flarum_posts.is_approved = 1", p.ID, start, end, "comment")
+		Where("flarum_posts.user_id = ? AND flarum_posts.created_at >= ? AND flarum_posts.created_at < ? AND flarum_posts.hidden_at IS NULL AND flarum_posts.type = ? AND flarum_posts.is_approved = 1", p.ID, start, end, "comment").
+		Where("NOT EXISTS (SELECT 1 FROM flarum_discussions activity_discussion WHERE activity_discussion.id = flarum_posts.discussion_id AND (activity_discussion.first_post_id = flarum_posts.id OR (COALESCE(activity_discussion.first_post_id, 0) = 0 AND flarum_posts.number = 1)))")
 	if !canSeeHidden {
 		dq = dq.Where("flarum_discussions.hidden_at IS NULL AND flarum_discussions.is_approved = 1")
 	}
-	var times []time.Time
-	dq.Session(&gorm.Session{}).Pluck("flarum_discussions.created_at", &times)
-	pq.Session(&gorm.Session{}).Pluck("flarum_posts.created_at", &times)
+	var discussionTimes, replyTimes []time.Time
+	if err := dq.Pluck("flarum_discussions.created_at", &discussionTimes).Error; err != nil {
+		log.Printf("[api] userActivity 讨论查询失败 user=%d: %v", p.ID, err)
+		fail(c, http.StatusInternalServerError, "活动记录加载失败，请重试。")
+		return
+	}
+	if err := pq.Pluck("flarum_posts.created_at", &replyTimes).Error; err != nil {
+		log.Printf("[api] userActivity 回复查询失败 user=%d: %v", p.ID, err)
+		fail(c, http.StatusInternalServerError, "活动记录加载失败，请重试。")
+		return
+	}
 
 	counts := map[string]int{}
-	for _, t := range times {
+	for _, t := range append(discussionTimes, replyTimes...) {
 		counts[t.In(cst).Format("2006-01-02")]++
 	}
 	type day struct {
@@ -697,9 +706,30 @@ func (s *Server) postEditGet(c *gin.Context) {
 		return
 	}
 	var d models.Discussion
-	s.db.Select("id, slug").First(&d, p.DiscussionID)
+	if err := s.db.Select("id, slug, title").First(&d, p.DiscussionID).Error; err != nil {
+		fail(c, http.StatusInternalServerError, "加载失败，请重试。")
+		return
+	}
+	// 楼层号包含系统事件和已移除的回复，不能直接用楼层号推算分页。
+	var position int64
+	query := s.db.Model(&models.Post{}).
+		Where("discussion_id = ? AND type = ? AND is_approved = ? AND is_private = ?", d.ID, "comment", true, false)
+	if p.Number != nil {
+		query = query.Where("number <= ? OR number IS NULL", *p.Number)
+	} else {
+		query = query.Where("number IS NULL")
+	}
+	if err := query.Count(&position).Error; err != nil {
+		fail(c, http.StatusInternalServerError, "加载失败，请重试。")
+		return
+	}
+	page := 1
+	if position > 0 {
+		page = int((position-1)/perPagePosts) + 1
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"id":         p.ID,
+		"page":       page,
 		"content":    p.Markdown(),
 		"discussion": gin.H{"id": d.ID, "slug": d.Slug(), "title": d.Title},
 	})
