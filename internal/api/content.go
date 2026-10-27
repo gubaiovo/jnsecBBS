@@ -12,6 +12,7 @@ import (
 	"github.com/exzco/bbs/internal/models"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // home 首页：大版块卡片（版块 + 子版块 + 最后活跃话题）。
@@ -548,27 +549,46 @@ func (s *Server) reply(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "回复内容不能为空。")
 		return
 	}
-	now := time.Now()
-	nextNumber := d.CommentCount + 1
 	uid := u.ID
 	post := models.Post{
-		DiscussionID: d.ID, Number: &nextNumber, UserID: &uid,
-		CreatedAt: now, Type: "comment", IsApproved: true,
+		DiscussionID: d.ID, UserID: &uid, Type: "comment", IsApproved: true,
 	}
 	post.SetMarkdown(body.Content)
+	var position int64
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// 先锁主题再读取楼层，串行分配同一主题的回复；请求预加载的计数可能已过期。
+		var current models.Discussion
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id", "post_number_index").First(&current, d.ID).Error; err != nil {
+			return err
+		}
+		var maxNumber int
+		// 系统事件、隐藏/待审/私密帖也会占用唯一楼层号，不能按评论数量分配。
+		if err := tx.Model(&models.Post{}).Where("discussion_id = ?", d.ID).
+			Select("COALESCE(MAX(number), 0)").Scan(&maxNumber).Error; err != nil {
+			return err
+		}
+		nextNumber := max(current.PostNumberIndex, maxNumber) + 1
+		now := time.Now()
+		post.Number, post.CreatedAt = &nextNumber, now
 		if err := tx.Create(&post).Error; err != nil {
 			return err
 		}
-		// Flarum 计数语义（原子递增，避免与 PHP 端并发写竞态）
+		// 评论计数与楼层索引分开维护；保留已删除楼层，且修复落后的历史索引。
 		if err := tx.Model(&models.Discussion{}).Where("id = ?", d.ID).Updates(map[string]any{
 			"comment_count":       gorm.Expr("comment_count + 1"),
-			"post_number_index":   gorm.Expr("post_number_index + 1"),
+			"post_number_index":   nextNumber,
 			"last_posted_at":      now,
 			"last_post_id":        post.ID,
 			"last_post_number":    nextNumber,
 			"last_posted_user_id": uid,
 		}).Error; err != nil {
+			return err
+		}
+		// 分页按详情接口实际查询的评论位置计算，楼层空隙不会生成空白页。
+		if err := tx.Model(&models.Post{}).
+			Where("discussion_id = ? AND type = ? AND is_approved = ? AND is_private = ?", d.ID, "comment", true, false).
+			Count(&position).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&models.User{}).Where("id = ?", u.ID).
@@ -600,7 +620,7 @@ func (s *Server) reply(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"postId": post.ID, "number": post.PostNumber(),
-		"page": (post.PostNumber()-1)/perPagePosts + 1,
+		"page": (position-1)/perPagePosts + 1,
 	})
 }
 
